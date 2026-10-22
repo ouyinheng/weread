@@ -4,6 +4,8 @@
 
 项目是纯本地应用，没有账号、书城后台、云同步，所有书和阅读数据都保存在设备的 IndexedDB 中。
 
+![微读界面预览：书架、阅读、目录与书源管理](assets/screenshots/overview.png)
+
 ## 功能
 
 - **本地导入**：`.txt` / `.epub` / `.md`，自动识别 GBK / UTF-8 编码，支持章节切分和 EPUB 目录。

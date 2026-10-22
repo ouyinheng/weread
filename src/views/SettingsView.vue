@@ -52,8 +52,8 @@ async function clearCache() {
 
 function about() {
   void alertDialog({
-    title: '关于微信读书',
-    message: `微信读书（本地版） ${appVersion}\n\n本地导入 · 离线阅读 · 进度本地保存`,
+    title: '关于微读',
+    message: `微读（本地版） ${appVersion}\n\n本地导入 · 离线阅读 · 进度本地保存`,
     confirmText: '知道了',
   })
 }
@@ -154,7 +154,7 @@ function about() {
       <!-- About -->
       <div class="settings-group">
         <button class="settings-cell" @click="about">
-          <span class="settings-cell-label">关于微信读书</span>
+          <span class="settings-cell-label">关于微读</span>
           <span class="settings-cell-value">v{{ appVersion }}</span>
           <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
         </button>

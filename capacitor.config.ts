@@ -4,7 +4,7 @@ const config: CapacitorConfig = {
   // Must match android/app/build.gradle applicationId — a mismatch makes
   // `cap sync` regenerate strings.xml with the wrong package_name.
   appId: 'com.weread.app',
-  appName: '微信读书',
+  appName: '微读',
   webDir: 'dist',
   server: {
     androidScheme: 'https',

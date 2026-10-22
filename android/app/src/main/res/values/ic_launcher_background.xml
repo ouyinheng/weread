@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Cloth-bound book cover. Deep enough that the cream mark reads at 48px,
+         and the same ink the splash screen is painted with. -->
+    <color name="ic_launcher_background">#1B3A5C</color>
 </resources>

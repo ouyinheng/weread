@@ -11,10 +11,11 @@
  * What remains are settings that belong to the app, plus the four reading
  * behaviours the user asked to keep.
  */
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores'
 import { useBookStore } from '@/stores'
+import { useSourceStore } from '@/stores/source'
 import { fontLabelOf } from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
 import { pickAndImport } from '@/utils/importer'
@@ -23,10 +24,25 @@ import { alertDialog, confirmDialog } from '@/utils/dialog'
 const router = useRouter()
 const store = useSettingsStore()
 const bookStore = useBookStore()
+const sourceStore = useSourceStore()
 
 const s = computed(() => store.settings)
 
 const appVersion = '1.0.0'
+
+onMounted(() => { sourceStore.load() })
+
+async function toggleNetworkSources() {
+  if (!sourceStore.networkEnabled) {
+    const ok = await confirmDialog({
+      title: '开启网络书源',
+      message: '开启后，搜索、加入书架、阅读未缓存章节和书源体检会向书源站点发起网络请求。书源地址可在「书源管理」中查看。',
+      confirmText: '开启',
+    })
+    if (!ok) return
+  }
+  await sourceStore.setNetworkEnabled(!sourceStore.networkEnabled)
+}
 
 async function clearCache() {
   const ok = await confirmDialog({
@@ -136,6 +152,26 @@ function about() {
 
       <p class="settings-hint">
         字号、背景、行距等排版设置请在阅读页底部「字体」「亮度」中调整，改动会立即显示在正文上。
+      </p>
+
+      <!-- 网络书源：默认关闭，首次开启时说明会联网 -->
+      <div class="settings-group">
+        <div class="settings-row settings-row--toggle">
+          <span class="settings-label">网络书源</span>
+          <button
+            class="toggle"
+            :class="{ on: sourceStore.networkEnabled }"
+            role="switch"
+            :aria-checked="sourceStore.networkEnabled"
+            @click="toggleNetworkSources"
+          >
+            <span class="toggle__dot" />
+          </button>
+        </div>
+      </div>
+
+      <p class="settings-hint">
+        网络书源关闭时不发任何请求；开启后仅在搜索、加入书架、阅读未缓存章节和书源体检时联网。
       </p>
 
       <!-- Library -->

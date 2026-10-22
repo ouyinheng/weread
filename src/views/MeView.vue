@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBookStore, useBookmarkStore, useAppSettingsStore } from '@/stores'
+import { useSourceStore } from '@/stores/source'
 import type { Highlight } from '@/types'
 import { getAllReadingTime, formatDuration } from '@/utils/reading-time'
 import { dbGetAll, openRawDB } from '@/utils/db'
@@ -12,6 +13,7 @@ const router = useRouter()
 const bookStore = useBookStore()
 const bookmarkStore = useBookmarkStore()
 const appSettings = useAppSettingsStore()
+const sourceStore = useSourceStore()
 const app = computed(() => appSettings.app)
 
 const totalMs = ref(0)
@@ -81,7 +83,7 @@ async function measureStorage() {
 
   try {
     const db = await openRawDB()
-    const stores = ['books', 'chapters', 'files', 'bookmarks', 'sessions']
+    const stores = ['books', 'chapters', 'files', 'bookmarks', 'sessions', 'sources']
     let total = 0
     for (const name of stores) {
       if (!db.objectStoreNames.contains(name)) continue
@@ -101,6 +103,7 @@ async function measureStorage() {
 onMounted(async () => {
   await bookStore.loadBooks()
   await bookmarkStore.loadAll()
+  await sourceStore.load()
   noteCount.value = (await dbGetAll<Highlight>('highlights')).length
   totalMs.value = await getAllReadingTime()
   await measureStorage()
@@ -147,6 +150,11 @@ onMounted(async () => {
           <span class="me__row-label">本地占用</span>
           <span class="me__row-value">{{ storageText }}</span>
         </div>
+        <button class="me__row me__row--link" @click="router.push({ name: 'sourceList' })">
+          <span class="me__row-label">书源管理</span>
+          <span class="me__row-value">{{ sourceStore.sources.length }} 个</span>
+          <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
+        </button>
       </div>
 
       <!-- App-level appearance that has no duplicate in the reading settings. -->
@@ -321,6 +329,23 @@ onMounted(async () => {
 
 .me__row:last-child {
   border-bottom: none;
+}
+
+/* Row that navigates: keep the row look, drop the button chrome. */
+.me__row--link {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.me__row--link:active {
+  opacity: 0.55;
+}
+
+.me__row-chevron {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-left: -4px;
 }
 
 .me__row-label {

@@ -14,6 +14,7 @@
 import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore, useAppSettingsStore } from './stores'
+import { useSourceStore } from './stores/source'
 import TabBar from './components/TabBar.vue'
 import ImportOverlay from './components/ImportOverlay.vue'
 import DialogHost from './components/DialogHost.vue'
@@ -91,6 +92,8 @@ onMounted(async () => {
   // App-level appearance first: it changes the chrome's font before first paint.
   await appSettings.load()
   await settings.loadSettings()
+  // 装内置书源并读回总开关；失败不阻塞首屏（存储异常时会话仍可读本地书）。
+  try { await useSourceStore().load() } catch { /* 书源不可用时按本地库运行 */ }
   syncDocumentTheme()
   syncNativeChrome()
 })

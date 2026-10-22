@@ -4,8 +4,8 @@ import { isTabRoute, tabIndex } from './tabs'
 /** Depth used to decide push vs. pop direction. */
 export function routeDepth(name: unknown): number {
   const n = String(name || '')
-  if (n === 'reader') return 3
-  if (n === 'catalog' || n === 'settings') return 2
+  if (n === 'reader' || n === 'sourceDetail') return 3
+  if (n === 'catalog' || n === 'settings' || n === 'sourceList') return 2
   if (n === 'fontSettings') return 3
   return 1
 }
@@ -19,6 +19,9 @@ const routes = [
   { path: '/catalog/:id', name: 'catalog', component: () => import('@/views/CatalogView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
   { path: '/settings/font', name: 'fontSettings', component: () => import('@/views/FontSettingsView.vue') },
+  { path: '/sources', name: 'sourceList', component: () => import('@/views/SourceListView.vue') },
+  // 用 query 传书源 id：id 本身就是一个 URL，放进 path 参数会反复编码。
+  { path: '/sources/detail', name: 'sourceDetail', component: () => import('@/views/SourceDetailView.vue') },
 ]
 
 const router = createRouter({

@@ -3,7 +3,8 @@ const DB_NAME = 'weread'
 // v3: `files` store keeps the original book bytes so a parser upgrade can
 //     re-parse, and covers move from volatile blob: URLs to data URLs.
 // v4: `highlights` store — 划线/想法 ranges selected in the reader.
-const DB_VERSION = 4
+// v5: `sources` store — legado 在线书源（只新增，不改任何现有 store）。
+const DB_VERSION = 5
 
 let db: IDBDatabase | null = null
 
@@ -51,6 +52,10 @@ function openDB(): Promise<IDBDatabase> {
       } else {
         const st = req.transaction!.objectStore('highlights')
         if (!st.indexNames.contains('bookId')) st.createIndex('bookId', 'bookId', { unique: false })
+      }
+      // v5: 在线书源配置。数量很小，enabled / health 在内存里过滤，不建索引。
+      if (!d.objectStoreNames.contains('sources')) {
+        d.createObjectStore('sources', { keyPath: 'id' })
       }
     }
     req.onsuccess = () => { db = req.result; resolve(db) }

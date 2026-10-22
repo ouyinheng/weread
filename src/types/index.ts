@@ -16,6 +16,18 @@ export interface Book {
   parserVersion?: number
   /** Original filename, needed to re-parse from the stored source bytes. */
   sourceName?: string
+
+  /* ---------- 在线书（sourceId 存在即在线书，format 仍是 txt） ---------- */
+  /** 来源书源 id；本地导入的书为 undefined */
+  sourceId?: string
+  /** 在线书在源站的详情页 */
+  remoteBookUrl?: string
+  /** 在线书目录页（可能等于详情页） */
+  remoteTocUrl?: string
+  /** 已落库正文的章节数，用于显示缓存进度 */
+  cachedChapterCount?: number
+  /** 上次阅读位置对应的源站章节 URL，用于目录变动后重新定位 */
+  lastRemoteUrl?: string
 }
 
 export interface Chapter {
@@ -23,6 +35,8 @@ export interface Chapter {
   title: string
   charOffset: number
   wordCount: number
+  /** 在线章节的源站 URL；本地书为 undefined。正文为空时凭它去抓 */
+  remoteUrl?: string
 }
 
 export interface ReaderSettings {

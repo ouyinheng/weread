@@ -9,7 +9,8 @@ import {
   loadHighlights,
   removeHighlight,
 } from '@/utils/highlights'
-import type { Chapter, Highlight } from '@/types'
+import type { Book, Chapter, Highlight } from '@/types'
+import { ensureChapterText, restorePosition } from '@/utils/source/sourceService'
 import ReaderTopBar from '@/components/reader/ReaderTopBar.vue'
 import ReaderBottomBar from '@/components/reader/ReaderBottomBar.vue'
 import CatalogDrawer from '@/components/reader/CatalogDrawer.vue'
@@ -57,9 +58,15 @@ const loading = ref(true)
 
 const chapterList = ref<Chapter[]>([])
 const chapterHtml = ref<Map<number, string>>(new Map())
+/** 在线章节的源站 URL，进度恢复时按它对回章节。 */
+const chapterUrls = ref<Map<number, string>>(new Map())
 const currentChapter = ref(0)
 const currentPage = ref(0)
 const totalPages = ref(1)
+
+/* 在线章节按需抓取时的状态（本地书始终为空） */
+const fetchingChapter = ref(false)
+const chapterError = ref('')
 
 /* ---------- character bookkeeping ----------
  * Progress is stored as (chapterIndex, charOffset) — the same model WeRead uses
@@ -628,13 +635,45 @@ function snapPageHeight(raw: number): number {
 /** Horizontal distance between two columns. */
 const columnStride = computed(() => pageBox.value.w + pageBox.value.gap)
 
+/** 抓一章在线正文并写回内存；并发请求由 sourceService 的 inflight 去重。 */
+async function loadRemoteChapter(index: number): Promise<void> {
+  const b = book.value
+  if (!b) return
+  fetchingChapter.value = true
+  chapterError.value = ''
+  try {
+    const res = await ensureChapterText(b, index)
+    if (res.html) chapterHtml.value.set(index, res.html)
+  } catch (e) {
+    if (index === currentChapter.value) {
+      chapterError.value = (e as Error)?.message || '章节加载失败'
+    }
+  } finally {
+    fetchingChapter.value = false
+  }
+}
+
+async function retryChapter(): Promise<void> {
+  chapterError.value = ''
+  await renderChapter(currentCharOffset.value)
+}
+
 /**
  * Re-layout the current chapter and land on the page holding `charOffset`.
  * Callers pass a character offset (font-size independent) rather than a page.
  */
 async function renderChapter(charOffset = 0) {
-  const ch = chapterList.value[currentChapter.value]
+  const index = currentChapter.value
+  const ch = chapterList.value[index]
   if (!ch) return
+
+  // 在线书：本章正文还没落库时先抓一次。抓完就是纯本地路径，零网络开销。
+  if (book.value?.sourceId && !chapterHtml.value.get(index)) {
+    await loadRemoteChapter(index)
+  }
+  // 抓取期间用户可能已经翻到别的章，旧的那次不要再排版。
+  if (index !== currentChapter.value) return
+
   await nextTick()
   measureViewport()
   await nextTick()
@@ -815,7 +854,7 @@ function saveProgress() {
   saveTimer = setTimeout(async () => {
     if (!book.value) return
     const pct = Math.round(percentValue.value)
-    await bookStore.updateBook(bookId, {
+    const patch: Partial<Book> = {
       lastChapterIndex: currentChapter.value,
       lastCharOffset: currentCharOffset.value,
       lastReadAt: Date.now(),
@@ -823,7 +862,11 @@ function saveProgress() {
       // "从头开始" resets it explicitly through the shelf menu.
       progress: Math.max(book.value.progress, pct),
       finished: pct >= 99
-    })
+    }
+    // 在线书：记住源站章节地址，目录变动后还能对回这一章。
+    const remote = chapterUrls.value.get(currentChapter.value)
+    if (remote) patch.lastRemoteUrl = remote
+    await bookStore.updateBook(bookId, patch)
   }, 400)
 }
 
@@ -1002,7 +1045,8 @@ onMounted(async () => {
 
   // Books imported by an older parser carry markup the reader can't render
   // (leaked <head>/<title> from EPUB XHTML). Rebuild them from source bytes.
-  if (needsRebuild(book.value)) {
+  // 在线书没有原始字节，也不经过本地解析器，跳过这次无用的尝试。
+  if (!book.value.sourceId && needsRebuild(book.value)) {
     try {
       if (await rebuildBook(book.value)) await bookStore.loadBooks()
     } catch { /* no stored source: keep reading what we have */ }
@@ -1013,10 +1057,14 @@ onMounted(async () => {
 
   const all = await dbGetAll<any>('chapters')
   const map = new Map<number, string>()
+  const urls = new Map<number, string>()
   for (const c of all) {
-    if (c.bookId === bookId) map.set(c.index, c.html)
+    if (c.bookId !== bookId) continue
+    if (c.html) map.set(c.index, c.html)
+    if (c.remoteUrl) urls.set(c.index, c.remoteUrl)
   }
   chapterHtml.value = map
+  chapterUrls.value = urls
 
   // Restore position: ?chapter= (from the catalog page) wins over saved progress.
   const queryChapter = Number(route.query.chapter)
@@ -1024,7 +1072,9 @@ onMounted(async () => {
   if (Number.isInteger(queryChapter) && queryChapter >= 0 && queryChapter < chapterList.value.length) {
     currentChapter.value = queryChapter
   } else if (book.value && book.value.lastChapterIndex < chapterList.value.length) {
-    currentChapter.value = book.value.lastChapterIndex
+    // 在线书目录可能增删章节：index 会漂，优先按章节 URL 对回。
+    const refs = chapterList.value.map(c => ({ remoteUrl: urls.get(c.index) }))
+    currentChapter.value = restorePosition(book.value, refs)
     restoreChar = book.value.lastCharOffset || 0
   }
   await bookmarkStore.loadBookmarks(bookId)
@@ -1167,6 +1217,16 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
         v-html="renderedHtml"
       />
     </div>
+
+    <!-- 在线章节按需抓取的状态：只覆盖一小块，不遮挡已排版的内容。 -->
+    <div v-if="fetchingChapter" class="reader__fetch">
+      <LoadingDots />
+      <span>正在加载本章…</span>
+    </div>
+    <button v-else-if="chapterError" class="reader__fetch reader__fetch--error" @click="retryChapter">
+      <span>{{ chapterError }}</span>
+      <span class="reader__fetch-retry">点击重试</span>
+    </button>
 
     <!--
       Footer: WeRead leaves the left end blank and puts the position on the
@@ -1478,6 +1538,38 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
 
 .reader__loading-text {
   letter-spacing: 0.2px;
+}
+
+/* 章节抓取提示：浮在正文上方，只有错误态可点（重试），不挡翻页。 */
+.reader__fetch {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  box-shadow: 0 4px 18px var(--shadow);
+  font-size: calc(12px * var(--app-font-scale));
+  color: var(--text-secondary);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.reader__fetch--error {
+  pointer-events: auto;
+  max-width: 78%;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.reader__fetch-retry {
+  font-size: calc(12px * var(--app-font-scale));
+  color: var(--accent);
 }
 
 @keyframes loadingIn {

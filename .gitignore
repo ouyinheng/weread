@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+
+# Web build output
+dist/
+dist-ssr/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Local design notes, kept out of the public repo
+docs/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local environment / secrets
+*.local
+.env
+.env.*
+!.env.example
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Capacitor / Android generated files
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/
+android/local.properties
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/src/main/res/xml/config.xml
+
+# Android packaged / signing files
+*.apk
+*.aab
+*.ap_
+*.jks
+*.keystore
+*.hprof

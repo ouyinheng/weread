@@ -1,0 +1,390 @@
+/* ============================================================
+   Theme tokens
+   ------------------------------------------------------------
+   `--accent` is the single brand colour. Every accent surface
+   (active tab, progress bar, slider thumb, links, selected state)
+   derives from it, so re-branding is a one-line change.
+
+   Reader themes only override *surface* tokens (bg/text/divider);
+   `--accent` stays the brand colour in all of them, except dark
+   where a slightly lighter tint keeps contrast legible.
+   ============================================================ */
+:root {
+  /* Brand */
+  --accent: #1b88ee;
+  --accent-press: #1478d6;
+  --accent-soft: rgba(27, 136, 238, 0.10);
+  --accent-soft-strong: rgba(27, 136, 238, 0.18);
+
+  /* Surfaces */
+  --bg: #FFFFFF;
+  --bg-secondary: #F7F7F7;
+  --bg-panel: #FFFFFF;
+  /* Measured from WeRead's own canvas (244,245,247), not a generic grey. */
+  --bg-page: #F4F5F7;
+
+  /* Text */
+  --text: #333333;
+  /*
+   * Reading surface text. WeRead's body copy is near black, a step darker than
+   * the grey used for chrome labels — measured from the reference screenshot at
+   * rgb(0,0,2) against the title row's rgb(107,107,118).
+   */
+  --text-body: #1A1A1A;
+  --text-secondary: #999999;
+  /*
+   * Page titles (书架 / 设置). Measured off the reference screenshot at
+   * rgb(107,107,118) — darker than a secondary label, lighter than body copy.
+   */
+  --text-title: #6B6B76;
+  --text-inverse: #FFFFFF;
+
+  /* Lines & elevation */
+  --divider: #EEEEEE;
+  --shadow: rgba(0, 0, 0, 0.04);
+  --topbar-bg: #FFFFFF;
+  /* WeRead keeps the tab bar white against the grey page canvas; the contrast
+     is what separates chrome from content. */
+  --bottom-bar-bg: #FFFFFF;
+  /* Inactive tab icons/labels; lifted in the black theme for contrast. */
+  --tabbar-inactive: #999999;
+
+  /* Layout */
+  /* WeRead's bar is 56dp, which is also a comfortable minimum touch target. */
+  --tabbar-height: 56px;
+  /*
+   * Native insets, written from `utils/native.ts` (Android) and left at 0 on
+   * the web. They cannot come from `env(safe-area-inset-*)` alone: Android's
+   * WebView does not expose system-bar insets to CSS, and since targetSdk 35
+   * the window is edge-to-edge whether we ask for it or not — without these the
+   * header slides under the clock and the tab bar sits under the gesture pill.
+   */
+  --statusbar-height: 0px;
+  --nav-inset: 0px;
+  /* One inset per edge: whichever of the native bar / CSS safe area is larger. */
+  --safe-top: max(var(--statusbar-height), env(safe-area-inset-top, 0px));
+  --safe-bottom: max(var(--nav-inset), env(safe-area-inset-bottom, 0px));
+  /*
+   * The page surface at ~95% opacity, for the strips that have to fade text out
+   * (reader status line in scroll mode). Kept in sync with --bg per theme.
+   */
+  --surface-fade: rgba(255, 255, 255, 0.94);
+  /* Long enough to read as motion, short enough not to feel slow. The easing is
+     a symmetric ease-out: the fast-then-stop curve made the incoming page hit
+     full opacity in ~40% of the duration, which looked like a hard cut. */
+  --page-duration: 220ms;
+  --page-easing: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* App-level typography, written by useAppSettingsStore. Chrome scales, the
+     reader's body text does not: body size is the reader's own control. */
+  --app-font-scale: 1;
+  --app-font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+}
+
+[data-theme="yellow"] {
+  --bg: #F5ECD9;
+  --bg-secondary: #EDE3CC;
+  --bg-panel: #F7EFDE;
+  --bg-page: #EDE2CB;
+  --text: #5B4636;
+  --text-body: #4A3728;
+  --text-secondary: #A08B72;
+  --text-inverse: #FFFFFF;
+  --divider: #DDD0B8;
+  --shadow: rgba(91, 70, 54, 0.06);
+  --topbar-bg: #FFFFFF;
+  --bottom-bar-bg: #FFFFFF;
+  --surface-fade: rgba(245, 236, 217, 0.94);
+}
+
+[data-theme="green"] {
+  --bg: #C8E6C9;
+  --bg-secondary: #B8DDB9;
+  --bg-panel: #CEEBD0;
+  --bg-page: #BCDDBC;
+  --text: #2E5E31;
+  --text-body: #234D26;
+  --text-secondary: #6B9E6F;
+  --text-inverse: #FFFFFF;
+  --divider: #A8CFAA;
+  --shadow: rgba(46, 94, 49, 0.06);
+  --topbar-bg: #FFFFFF;
+  --bottom-bar-bg: #FFFFFF;
+  --surface-fade: rgba(200, 230, 201, 0.94);
+}
+
+[data-theme="black"] {
+  --bg: #1A1A1A;
+  --bg-secondary: #2A2A2A;
+  --bg-panel: #242424;
+  --bg-page: #121212;
+  --text: #BBBBBB;
+  --text-body: #C9C9C9;
+  --text-secondary: #666666;
+  --text-title: #9A9AA6;
+  --text-inverse: #FFFFFF;
+  --divider: #333333;
+  --shadow: rgba(0, 0, 0, 0.3);
+  --topbar-bg: #1F1F1F;
+  --bottom-bar-bg: #1F1F1F;
+  --tabbar-inactive: #808082;
+  --surface-fade: rgba(26, 26, 26, 0.94);
+  /* Brand blue at full saturation is too dark on #1A1A1A; lift it. */
+  --accent: #4AA3f5;
+  --accent-press: #3b93e6;
+  --accent-soft: rgba(74, 163, 245, 0.16);
+  --accent-soft-strong: rgba(74, 163, 245, 0.26);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  /* Keeps the WebView from re-flowing when the on-screen keyboard opens. */
+  -webkit-text-size-adjust: 100%;
+  /* Native form controls (range tracks, checkboxes, spinners) follow the brand
+     colour instead of the browser default blue/green. Without this the sliders
+     kept their hard-coded colour and contradicted the theme. */
+  accent-color: var(--accent);
+}
+
+html, body, #app {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  font-family: var(--app-font-family);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/*
+ * Mobile-shell behaviour: chrome is not selectable (a long-press on a tab or a
+ * card should not start a text selection), while scroll containers keep their
+ * own momentum and do not hand overscroll to the browser's pull-to-refresh.
+ */
+.shelf,
+.discover,
+.me,
+.settings-page,
+.font-page,
+.catalog-page,
+.tabbar,
+.topbar,
+.bottombar,
+.catalog-mask,
+.notes-mask,
+.reader-mask {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.shelf__body,
+.discover__body,
+.me__body,
+.settings-body,
+.font-body,
+.catalog-body,
+.catalog__body,
+.notes__body,
+.fp-body,
+.reader__viewport {
+  overscroll-behavior-y: contain;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Brief mount fade shared by the main content lists. */
+@keyframes contentIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * App font scale.
+ *
+ * Scaling the root font size would normally multiply everything, but almost all
+ * of this app sizes text in `px` (deliberately: the reader must not inherit the
+ * chrome's scale). So the scale is applied to chrome font sizes explicitly
+ * through a var that carries a px value.
+ */
+html {
+  font-size: calc(16px * var(--app-font-scale));
+}
+
+button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  /* Native-feeling press feedback without a 300ms tap delay. */
+  touch-action: manipulation;
+}
+
+button:active {
+  opacity: 0.6;
+}
+
+input {
+  border: none;
+  outline: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+
+input[type='range'] {
+  accent-color: var(--accent);
+}
+
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ============================================================
+   Tab page transitions
+   ------------------------------------------------------------
+   Tab switches must feel like a native segment change: the
+   outgoing page stops receiving input immediately, the incoming
+   page settles with a short fade+lift. No opacity cross-fade
+   between two painted layers (that is what caused the flicker),
+   and `will-change` is scoped to the animation only so the
+   compositor does not keep every tab on its own layer.
+   ============================================================ */
+.tab-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* During a cross-fade both pages are in the viewport at once; stacking them
+     absolutely is what stops the outgoing page from pushing the incoming one
+     down (the "jump then fade" artefact). No background here: the shell already
+     paints it, and a second opaque full-screen layer doubles the pixels the
+     compositor must raster on every transition frame. */
+  position: absolute;
+  inset: 0;
+}
+
+/*
+  Only `opacity` + a small `translate3d` are animated, on two full-viewport
+  layers. Measured on the Pixel 6 emulator: animating both properties on both
+  pages cost 50ms/frame, while an opacity-only cross-fade holds 17ms — the
+  translate was forcing a layer re-raster every frame for a 10px shift that is
+  barely perceptible.
+*/
+.tab-forward-enter-active,
+.tab-forward-leave-active,
+.tab-back-enter-active,
+.tab-back-leave-active {
+  transition: opacity var(--page-duration) var(--page-easing);
+}
+
+/* The incoming page gets a hair of compositor promotion; the outgoing one is
+   left alone so it can be released as soon as the fade ends. */
+.tab-forward-enter-active,
+.tab-back-enter-active {
+  will-change: opacity;
+}
+
+/* Leaving pages never intercept touches during the transition. */
+.tab-forward-leave-active,
+.tab-forward-leave-to,
+.tab-back-leave-active,
+.tab-back-leave-to {
+  pointer-events: none;
+}
+
+.tab-forward-leave-to,
+.tab-back-leave-to {
+  opacity: 0;
+}
+
+/* Direction is conveyed by *which* page fades last, keeping a lateral feel
+   without paying for a transform on every frame. */
+.tab-forward-enter-from,
+.tab-back-enter-from {
+  opacity: 0;
+}
+
+/* Push/pop transitions for non-tab routes (settings, catalog, import). */
+.push-enter-active,
+.push-leave-active,
+.pop-enter-active,
+.pop-leave-active {
+  transition:
+    opacity 220ms var(--page-easing),
+    transform 220ms var(--page-easing);
+}
+
+.push-leave-active,
+.pop-leave-active {
+  pointer-events: none;
+}
+
+.push-enter-from {
+  opacity: 0;
+  transform: translate3d(100%, 0, 0);
+}
+.push-leave-to {
+  opacity: 0;
+  transform: translate3d(-24%, 0, 0);
+}
+.pop-enter-from {
+  opacity: 0;
+  transform: translate3d(-24%, 0, 0);
+}
+.pop-leave-to {
+  opacity: 0;
+  transform: translate3d(100%, 0, 0);
+}
+
+/* The reader is full-bleed: slide it over whatever it covers. */
+.reader-enter-active,
+.reader-leave-active {
+  transition:
+    opacity 200ms var(--page-easing),
+    transform 200ms var(--page-easing);
+}
+.reader-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 24px, 0);
+}
+.reader-leave-to {
+  opacity: 0;
+  transform: translate3d(0, 24px, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-forward-enter-active,
+  .tab-forward-leave-active,
+  .tab-back-enter-active,
+  .tab-back-leave-active,
+  .push-enter-active,
+  .push-leave-active,
+  .pop-enter-active,
+  .pop-leave-active,
+  .reader-enter-active,
+  .reader-leave-active {
+    transition-duration: 1ms;
+  }
+}

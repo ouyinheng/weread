@@ -952,8 +952,14 @@ async function toggleListenAutoNext() {
   await settingsStore.update({ listenAutoNext: !settings.value.listenAutoNext })
 }
 
-function openListenCatalog() {
+function collapseListening() {
   listenExpanded.value = false
+  // 听书是从工具栏进入的，收起后把菜单还原，否则底部工具栏会一直缺席。
+  showMenu.value = true
+}
+
+function openListenCatalog() {
+  collapseListening()
   showCatalog.value = true
 }
 
@@ -1624,7 +1630,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       @auto-next="toggleListenAutoNext"
       @timer="setListenTimer"
       @catalog="openListenCatalog"
-      @collapse="listenExpanded = false"
+      @collapse="collapseListening"
       @close="closeListening"
     />
     <ListenBar

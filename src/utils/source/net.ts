@@ -147,6 +147,14 @@ function headerOf(headers: Record<string, string> | undefined, name: string): st
 }
 
 function decodeBody(data: unknown, headers: Record<string, string> | undefined): string {
+  /*
+   * CapacitorHttp 遇到 `Content-Type: application/json` 会无视 responseType，
+   * 直接把响应解析成对象。书源合集正好是 JSON，这里必须序列化回文本，
+   * 否则 JSON.parse 收到的是 "[object Object]"，表现为只有手机端导入失败。
+   */
+  if (data && typeof data === 'object' && !(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data)) {
+    try { return JSON.stringify(data) } catch { return '' }
+  }
   const bytes = toBytes(data)
   // 原生端已解成字符串（非 arraybuffer 路径）：直接用。
   if (!bytes) return typeof data === 'string' ? data : String(data ?? '')

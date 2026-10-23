@@ -60,7 +60,7 @@ export interface NativeEdgeTtsPlugin {
  *
  * These are the point of the online engine: each one is a neural voice whose
  * pitch is tuned for a kind of story, so a sentence sounds spoken rather than
- * scanned. Four of the nine are male. The id is what gets stored in
+ * scanned. Six of the fourteen are male. The id is what gets stored in
  * `ReaderSettings.listenVoice`, and its `edge:` prefix is how the engine router
  * knows to go online.
  */
@@ -148,6 +148,46 @@ export const EDGE_VOICES: EdgeVoice[] = [
     label: '晓妮 · 陕西女声',
     desc: '方言味浓，适合乡土题材',
     pitch: '+0Hz',
+  },
+  {
+    id: 'edge:zh-TW-HsiaoChenNeural',
+    voice: 'zh-TW-HsiaoChenNeural',
+    lang: 'zh-TW',
+    label: '晓臻 · 台湾女声',
+    desc: '细柔台湾腔，适合轻小说',
+    pitch: '+0Hz',
+  },
+  {
+    id: 'edge:zh-TW-HsiaoYuNeural',
+    voice: 'zh-TW-HsiaoYuNeural',
+    lang: 'zh-TW',
+    label: '晓雨 · 台湾女声',
+    desc: '清亮台湾腔，适合校园故事',
+    pitch: '+2Hz',
+  },
+  {
+    id: 'edge:zh-HK-HiuMaanNeural',
+    voice: 'zh-HK-HiuMaanNeural',
+    lang: 'zh-HK',
+    label: '晓曼 · 粤语女声',
+    desc: '粤语发音，适合粤语内容',
+    pitch: '+0Hz',
+  },
+  {
+    id: 'edge:zh-HK-HiuGaaiNeural',
+    voice: 'zh-HK-HiuGaaiNeural',
+    lang: 'zh-HK',
+    label: '晓佳 · 粤语女声',
+    desc: '粤语发音，适合粤语内容',
+    pitch: '+0Hz',
+  },
+  {
+    id: 'edge:zh-HK-WanLungNeural',
+    voice: 'zh-HK-WanLungNeural',
+    lang: 'zh-HK',
+    label: '云龙 · 粤语男声',
+    desc: '粤语发音，适合粤语内容',
+    pitch: '-2Hz',
   },
 ]
 

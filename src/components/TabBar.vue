@@ -17,7 +17,6 @@ import type { IconName } from '@/components/icon-names'
 import { tapFeedback } from '@/utils/native'
 
 const TAB_ICONS: Record<string, IconName> = {
-  discover: 'tab-read',
   shelf: 'tab-shelf',
   me: 'tab-me',
 }

@@ -11,7 +11,7 @@
  *    `route.meta.transition`
  *  - status bar / tab bar colour, sampled from the active page surface
  */
-import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore, useAppSettingsStore } from './stores'
 import { useSourceStore } from './stores/source'
@@ -38,7 +38,7 @@ const showsTabBar = computed(() => isTabRoute(route.name) && !uiState.hideTabBar
 const isFullBleed = computed(() => String(route.name || '') === 'reader')
 
 /** Only tab pages are cached; detail pages should re-read fresh data. */
-const keepAliveNames = ['shelf', 'discover', 'me']
+const keepAliveNames = ['shelf', 'me']
 
 /**
  * Read straight from the guard's decision. Fall back to `none` for the very
@@ -47,10 +47,22 @@ const keepAliveNames = ['shelf', 'discover', 'me']
 const transitionName = computed(() => String(route.meta.transition || 'none'))
 
 /* ---------- theme + native chrome ---------- */
-const isDarkTheme = computed(() => settings.settings.theme === 'black')
+/**
+ * 阅读主题只属于阅读页：书架、搜索、设置等页面跟随应用自己的浅色/跟随系统
+ * 设置，不再因为换阅读背景而整屏变色。
+ */
+const darkMedia = window.matchMedia?.('(prefers-color-scheme: dark)')
+const systemDark = ref(!!darkMedia?.matches)
+const appTheme = computed(() => {
+  if (appSettings.app.theme === 'dark') return 'black'
+  if (appSettings.app.theme === 'light') return 'white'
+  return systemDark.value ? 'black' : 'white'
+})
+const activeTheme = computed(() => (isFullBleed.value ? settings.settings.theme : appTheme.value))
+const isDarkTheme = computed(() => activeTheme.value === 'black')
 
 function syncDocumentTheme() {
-  document.documentElement.setAttribute('data-theme', settings.settings.theme)
+  document.documentElement.setAttribute('data-theme', activeTheme.value)
   // Tells the WebView to render form controls / scrollbars to match.
   document.documentElement.style.colorScheme = isDarkTheme.value ? 'dark' : 'light'
 }
@@ -92,34 +104,28 @@ onMounted(async () => {
   // App-level appearance first: it changes the chrome's font before first paint.
   await appSettings.load()
   await settings.loadSettings()
-  // 装内置书源并读回总开关；失败不阻塞首屏（存储异常时会话仍可读本地书）。
+  // 读书源并读回总开关；失败不阻塞首屏（存储异常时会话仍可读本地书）。
   try { await useSourceStore().load() } catch { /* 书源不可用时按本地库运行 */ }
   syncDocumentTheme()
   syncNativeChrome()
 })
 
 /* Follow the OS colour scheme when the user asks for it. */
-const darkMedia = window.matchMedia?.('(prefers-color-scheme: dark)')
 function onSchemeChange() {
-  if (!appSettings.app.followSystemTheme) return
-  document.documentElement.setAttribute(
-    'data-theme',
-    darkMedia?.matches ? 'black' : settings.settings.theme
-  )
+  systemDark.value = !!darkMedia?.matches
+  syncDocumentTheme()
   syncNativeChrome()
 }
 onMounted(() => darkMedia?.addEventListener?.('change', onSchemeChange))
 onBeforeUnmount(() => darkMedia?.removeEventListener?.('change', onSchemeChange))
 
-watch(() => settings.settings.theme, () => {
-  syncDocumentTheme()
-  syncNativeChrome()
-})
-
-watch(() => appSettings.app.followSystemTheme, (follow) => {
-  if (follow) onSchemeChange()
-  else syncDocumentTheme()
-})
+watch(
+  [() => settings.settings.theme, () => route.name, () => appSettings.app.theme],
+  () => {
+    syncDocumentTheme()
+    syncNativeChrome()
+  }
+)
 
 watch(() => route.fullPath, syncNativeChrome, { flush: 'post' })
 

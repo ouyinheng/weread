@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { BookSource, SearchHit } from '@/types/source'
-import type { SearchFailure, DiagnoseResult } from '@/utils/source/sourceService'
+import type { SearchFailure, DiagnoseResult, ImportResult } from '@/utils/source/sourceService'
 import * as sourceService from '@/utils/source/sourceService'
 
 /**
@@ -19,6 +19,9 @@ export const useSourceStore = defineStore('source', () => {
   const lastKey = ref('')
   const hits = ref<SearchHit[]>([])
   const failures = ref<SearchFailure[]>([])
+  /** 本次搜索覆盖了多少个书源（全量合集不可能一次全查）。 */
+  const searchScope = ref({ searched: 0, total: 0 })
+  const checkProgress = ref({ done: 0, total: 0 })
 
   /** 总开关打开、且至少有一条启用中的书源，发现页才走在线搜索。 */
   const onlineReady = computed(() => networkEnabled.value && sources.value.some(s => s.enabled))
@@ -26,7 +29,6 @@ export const useSourceStore = defineStore('source', () => {
 
   async function load(force = false): Promise<void> {
     if (loaded.value && !force) return
-    await sourceService.ensureBuiltinSources()
     sources.value = await sourceService.listSources()
     networkEnabled.value = await sourceService.loadNetworkEnabled()
     loaded.value = true
@@ -41,10 +43,10 @@ export const useSourceStore = defineStore('source', () => {
     await sourceService.saveNetworkEnabled(enabled)
   }
 
-  async function importText(text: string): Promise<number> {
-    const n = await sourceService.importSourcesFromText(text)
+  async function importText(text: string): Promise<ImportResult> {
+    const result = await sourceService.importSourcesFromText(text)
     await refresh()
-    return n
+    return result
   }
 
   async function remove(id: string): Promise<void> {
@@ -72,6 +74,7 @@ export const useSourceStore = defineStore('source', () => {
     if (!word) {
       hits.value = []
       failures.value = []
+      searchScope.value = { searched: 0, total: 0 }
       searching.value = false
       return
     }
@@ -82,10 +85,12 @@ export const useSourceStore = defineStore('source', () => {
       if (seq !== searchSeq) return
       hits.value = out.hits
       failures.value = out.failures
+      searchScope.value = { searched: out.searched, total: out.total }
     } catch {
       if (seq === searchSeq) {
         hits.value = []
         failures.value = []
+        searchScope.value = { searched: 0, total: 0 }
       }
     } finally {
       if (seq === searchSeq) searching.value = false
@@ -98,6 +103,7 @@ export const useSourceStore = defineStore('source', () => {
     lastKey.value = ''
     hits.value = []
     failures.value = []
+    searchScope.value = { searched: 0, total: 0 }
     searching.value = false
   }
 
@@ -120,11 +126,30 @@ export const useSourceStore = defineStore('source', () => {
     return result
   }
 
+  /**
+   * 一次体检的源数上限。全量合集有几千条，一次全查会长时间占着网络和页面。
+   * 优先查启用中的、未检测的。
+   */
+  const CHECK_LIMIT = 40
+  const CHECK_CONCURRENCY = 4
+
   async function checkAll(key = '小说'): Promise<void> {
     if (checking.value) return
     checking.value = true
-    try {
-      await Promise.all(sources.value.map(async (s) => {
+
+    // 未检测的优先（启用 > 停用），都测过之后再轮询；重复点「全部体检」会继续往后推进。
+    const rank = (s: BookSource) => (s.health === 0 ? 0 : 2) + (s.enabled ? 0 : 1)
+    const list = [...sources.value]
+      .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN'))
+      .slice(0, CHECK_LIMIT)
+
+    checkProgress.value = { done: 0, total: list.length }
+    const queue = [...list]
+
+    const worker = async () => {
+      for (;;) {
+        const s = queue.shift()
+        if (!s) return
         try {
           const r = await sourceService.diagnose(s, key)
           const failed = r.steps.find(x => !x.ok)
@@ -132,7 +157,12 @@ export const useSourceStore = defineStore('source', () => {
         } catch (e) {
           await sourceService.markHealth(s.id, 3, (e as Error)?.message || '体检失败').catch(() => undefined)
         }
-      }))
+        checkProgress.value = { ...checkProgress.value, done: checkProgress.value.done + 1 }
+      }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: CHECK_CONCURRENCY }, worker))
     } finally {
       checking.value = false
       await refresh()
@@ -152,6 +182,8 @@ export const useSourceStore = defineStore('source', () => {
     lastKey,
     hits,
     failures,
+    searchScope,
+    checkProgress,
     onlineReady,
     enabledSources,
     load,

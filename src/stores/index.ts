@@ -66,6 +66,10 @@ export const useSettingsStore = defineStore('settings', () => {
     volumeKeyTurn: false,
     landscape: false,
     noAutoLock: false,
+    listenRate: 1,
+    listenVoice: '',
+    listenAutoNext: true,
+    listenFollow: true,
   })
 
   async function loadSettings() {
@@ -85,7 +89,7 @@ export const useAppSettingsStore = defineStore('appSettings', () => {
   const app = ref<AppSettings>({
     fontScale: 1,
     fontFamily: 'system',
-    followSystemTheme: true,
+    theme: 'system',
   })
 
   const loaded = ref(false)
@@ -96,7 +100,12 @@ export const useAppSettingsStore = defineStore('appSettings', () => {
       // Spread only known keys so an older record cannot inject stale fields.
       if (typeof saved.fontScale === 'number') app.value.fontScale = saved.fontScale
       if (typeof saved.fontFamily === 'string') app.value.fontFamily = saved.fontFamily
-      if (typeof saved.followSystemTheme === 'boolean') app.value.followSystemTheme = saved.followSystemTheme
+      if (saved.theme === 'light' || saved.theme === 'dark' || saved.theme === 'system') {
+        app.value.theme = saved.theme
+      } else if ((saved as { followSystemTheme?: boolean }).followSystemTheme === false) {
+        // 旧记录只有布尔开关：关掉跟随系统时相当于固定浅色。
+        app.value.theme = 'light'
+      }
     }
     loaded.value = true
     apply()

@@ -37,8 +37,6 @@ export interface BookSource {
   health: number
   lastCheckAt: number
   lastError: string
-  /** 内置源不可删，只能停用 */
-  builtin: boolean
   createdAt: number
 }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useBookStore, useBookmarkStore, useAppSettingsStore } from '@/stores'
+import { useBookStore, useBookmarkStore } from '@/stores'
 import { useSourceStore } from '@/stores/source'
 import type { Highlight } from '@/types'
 import { getAllReadingTime, formatDuration } from '@/utils/reading-time'
@@ -12,9 +12,7 @@ import Icon from '@/components/Icon.vue'
 const router = useRouter()
 const bookStore = useBookStore()
 const bookmarkStore = useBookmarkStore()
-const appSettings = useAppSettingsStore()
 const sourceStore = useSourceStore()
-const app = computed(() => appSettings.app)
 
 const totalMs = ref(0)
 const storageText = ref('—')
@@ -112,12 +110,6 @@ onMounted(async () => {
 
 <template>
   <div class="me tab-page">
-    <header class="me__bar">
-      <button class="me__bar-btn" aria-label="设置" @click="router.push('/settings')">
-        <Icon name="gear" :size="22" :width="1.8" />
-      </button>
-    </header>
-
     <main class="me__body">
       <div class="me__profile">
         <div class="me__avatar">
@@ -142,6 +134,17 @@ onMounted(async () => {
       </div>
 
       <div class="me__card me__rows">
+        <button class="me__row me__row--link" @click="router.push({ name: 'settings', query: { tab: 'reading' } })">
+          <span class="me__row-label">阅读设置</span>
+          <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
+        </button>
+        <button class="me__row me__row--link" @click="router.push({ name: 'settings', query: { tab: 'system' } })">
+          <span class="me__row-label">系统设置</span>
+          <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
+        </button>
+      </div>
+
+      <div class="me__card me__rows">
         <div class="me__row">
           <span class="me__row-label">累计阅读</span>
           <span class="me__row-value" :class="{ 'me__row-value--accent': totalMs > 0 }">{{ durationText }}</span>
@@ -157,22 +160,6 @@ onMounted(async () => {
         </button>
       </div>
 
-      <!-- App-level appearance that has no duplicate in the reading settings. -->
-      <div class="me__card me__rows">
-        <div class="me__row">
-          <span class="me__row-label">跟随系统深色模式</span>
-          <button
-            class="me__toggle"
-            :class="{ 'me__toggle--on': app.followSystemTheme }"
-            role="switch"
-            :aria-checked="app.followSystemTheme"
-            @click="appSettings.update({ followSystemTheme: !app.followSystemTheme })"
-          >
-            <span class="me__toggle-dot" />
-          </button>
-        </div>
-      </div>
-
       <p class="me__note">数据仅保存在本机浏览器存储中，不上传任何服务器。</p>
     </main>
   </div>
@@ -186,37 +173,12 @@ onMounted(async () => {
   background: var(--bg-page);
 }
 
-/* WeRead has a 56dp personal top bar; only the settings action has a real
-   destination in a local-only build, so the other slot stays empty. */
-.me__bar {
-  flex-shrink: 0;
-  height: calc(56px + var(--safe-top));
-  padding: 0 16px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-}
-
-.me__bar-btn {
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text);
-  border-radius: 50%;
-}
-
-.me__bar-btn:active {
-  opacity: 0.55;
-}
-
 .me__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 8px 20px calc(20px + var(--safe-bottom));
+  padding: calc(12px + var(--safe-top)) 20px calc(20px + var(--safe-bottom));
 }
 
 .me__profile {
@@ -361,36 +323,6 @@ onMounted(async () => {
 .me__row-value--accent {
   color: var(--accent);
   font-weight: 500;
-}
-
-.me__toggle {
-  position: relative;
-  width: 46px;
-  height: 22px;
-  border-radius: 11px;
-  background: rgba(120, 120, 128, 0.22);
-  flex-shrink: 0;
-  transition: background-color 200ms ease-out;
-}
-
-.me__toggle--on {
-  background: var(--accent);
-}
-
-.me__toggle-dot {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  transition: transform 200ms var(--page-easing);
-}
-
-.me__toggle--on .me__toggle-dot {
-  transform: translateX(24px);
 }
 
 .me__note {

@@ -33,7 +33,6 @@ function makeSource(rawPatch = {}, ruleToc = {}) {
     health: 0,
     lastCheckAt: 0,
     lastError: '',
-    builtin: false,
     createdAt: 0,
     raw: {
       searchUrl: '/search-{{key}}.html?p={{page}}',

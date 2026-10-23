@@ -115,6 +115,12 @@ const groups = computed<HitGroup[]>(() => {
   return Array.from(map.values())
 })
 
+const failureText = computed(() => {
+  const names = sourceStore.failures.slice(0, 8).map(f => f.sourceName)
+  const rest = sourceStore.failures.length - names.length
+  return rest > 0 ? `${names.join('、')} 等 ${sourceStore.failures.length} 个` : names.join('、')
+})
+
 function activeHit(g: HitGroup): SearchHit {
   const picked = picks.value[g.key]
   return g.hits.find(h => h.sourceId === picked) || g.primary
@@ -212,7 +218,7 @@ async function doAction(group: HitGroup): Promise<void> {
     <main v-if="onlineActive" class="discover__body">
       <div v-if="sourceStore.searching" class="discover__status">
         <Icon name="search" :size="16" />
-        正在搜索 {{ sourceStore.enabledSources.length }} 个书源…
+        正在搜索书源…
       </div>
 
       <template v-else>
@@ -259,7 +265,14 @@ async function doAction(group: HitGroup): Promise<void> {
         </button>
 
         <p v-if="sourceStore.failures.length" class="discover__hint">
-          {{ sourceStore.failures.length }} 个书源未返回结果：{{ sourceStore.failures.map(f => f.sourceName).join('、') }}
+          {{ sourceStore.failures.length }} 个书源未返回结果：{{ failureText }}
+        </p>
+
+        <p
+          v-if="sourceStore.searchScope.total > sourceStore.searchScope.searched"
+          class="discover__hint"
+        >
+          已检索 {{ sourceStore.searchScope.searched }}/{{ sourceStore.searchScope.total }} 个启用书源。书源太多时每次只查前 20 个，可在书源管理里停用不用的源。
         </p>
       </template>
     </main>

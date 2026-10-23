@@ -28,7 +28,7 @@ try {
     tabs: [...document.querySelectorAll('.tabbar__label')].map(e => e.textContent.trim()),
     bodyBg: getComputedStyle(document.body).backgroundColor,
   }))()`)
-  check('title is 微信读书', shell.title === '微信读书', shell.title)
+  check('title is 微读', shell.title === '微读', shell.title)
   check('app mounted', shell.hasApp, '')
   check('tabbar has 3 tabs', shell.tabbarCount === 3, shell.tabbarCount)
   check('no dead 有声书 tab', !shell.tabs.includes('有声书'), JSON.stringify(shell.tabs))

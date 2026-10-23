@@ -51,9 +51,9 @@ setActivePinia(createPinia())
 
 const store = useAppSettingsStore()
 check('default scale', store.app.fontScale === 1, store.app.fontScale)
-check('default follows system', store.app.followSystemTheme === true, store.app.followSystemTheme)
+check('default theme follows system', store.app.theme === 'system', store.app.theme)
 
-await store.update({ fontScale: 1.2, fontFamily: 'serif', followSystemTheme: false })
+await store.update({ fontScale: 1.2, fontFamily: 'serif', theme: 'dark' })
 check('update applies to state', store.app.fontScale === 1.2, store.app.fontScale)
 
 const saved = await new Promise((res, rej) => {
@@ -65,13 +65,21 @@ const saved = await new Promise((res, rej) => {
   }
   q.onerror = () => rej(q.error)
 })
-check('settings persisted', saved?.fontScale === 1.2 && saved?.fontFamily === 'serif', JSON.stringify(saved))
+check(
+  'settings persisted',
+  saved?.fontScale === 1.2 && saved?.fontFamily === 'serif' && saved?.theme === 'dark',
+  JSON.stringify(saved)
+)
 
 // A fresh store reads them back.
 setActivePinia(createPinia())
 const store2 = useAppSettingsStore()
 await store2.load()
-check('settings reload', store2.app.fontScale === 1.2 && store2.app.followSystemTheme === false, JSON.stringify(store2.app))
+check(
+  'settings reload',
+  store2.app.fontScale === 1.2 && store2.app.theme === 'dark',
+  JSON.stringify(store2.app)
+)
 
 // Clamp logic used by the slider.
 const clamp = (v) => Math.min(1.4, Math.max(0.85, Math.round(v * 100) / 100))

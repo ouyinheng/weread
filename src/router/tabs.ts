@@ -11,11 +11,10 @@ export interface TabDef {
 /** Order matters: it defines the slide direction when switching. */
 /**
  * WeRead's bar is: 阅读 / 书架 / 有声书 / 我. This build has no online catalogue,
- * so 阅读 and 有声书 would be empty shells; the honest mapping keeps 书架 / 发现 / 我
- * and does not ship dead entries that look like tabs but go nowhere.
+ * so 阅读 and 有声书 would be empty shells; the honest mapping keeps 书架 / 我.
+ * 搜索是书架顶部的入口，不再单独占一个 tab。
  */
 export const TABS: TabDef[] = [
-  { name: 'discover', path: '/discover', label: '发现' },
   { name: 'shelf', path: '/shelf', label: '书架' },
   { name: 'me', path: '/me', label: '我' },
 ]

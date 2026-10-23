@@ -44,6 +44,10 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Local plugins, registered before the bridge boots — they are not npm
+        // packages, so nothing generates a capacitor.plugins.json entry for them.
+        registerPlugin(TtsPlugin.class);
+        registerPlugin(EdgeTtsPlugin.class);
         super.onCreate(savedInstanceState);
         applySystemBars();
         exposeBarBridge();

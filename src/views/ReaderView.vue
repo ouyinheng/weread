@@ -19,8 +19,13 @@ import ThemePanel from '@/components/reader/ThemePanel.vue'
 import ProgressPanel from '@/components/reader/ProgressPanel.vue'
 import NotesPanel from '@/components/reader/NotesPanel.vue'
 import SelectionToolbar from '@/components/reader/SelectionToolbar.vue'
+import ListenBar from '@/components/reader/ListenBar.vue'
+import ListenView from '@/components/reader/ListenView.vue'
 import LoadingDots from '@/components/LoadingDots.vue'
 import type { ReaderPanel } from '@/components/reader/ReaderBottomBar.vue'
+import { segmentText, toCharOffset, type Sentence } from '@/audio/segmenter'
+import { useListenPlayer } from '@/audio/player'
+import { reasonText } from '@/audio/tts'
 import { fontStackOf, backgroundOf } from '@/utils/fonts'
 import { addReadingTime, getReadingTime, formatDuration } from '@/utils/reading-time'
 import { needsRebuild, rebuildBook } from '@/utils/library'
@@ -755,6 +760,229 @@ function jumpToChapter(index: number) {
   saveProgress()
 }
 
+/* ---------- 听书 ----------
+ * Read-aloud runs on the phone's own speech engine (src/audio/tts.ts); nothing
+ * leaves the device. The sentence is the unit of control because Android's
+ * engine has no pause — see src/audio/player.ts.
+ *
+ * Offsets: sentences are cut from `.reader__body`'s textContent, the same
+ * coordinate space the 划线 highlights use, so the follow-along paint lines up
+ * with saved highlights. Progress, however, is counted in non-whitespace
+ * characters (see `toCharOffset`), so listening writes the same position a
+ * page-turn would.
+ */
+const bodyText = ref('')
+/** 全屏听书页 or 底部迷你条。 */
+const listenExpanded = ref(true)
+/** 定时关闭剩余秒数；0 表示没开。 */
+const listenTimerLeft = ref(0)
+let listenTimerId: ReturnType<typeof setInterval> | null = null
+const listenSentences = ref<Sentence[]>([])
+const listenCharOffsets = ref<number[]>([])
+/** Rects to paint for the sentence being spoken. */
+const sentenceRects = ref<{ x: number; y: number; w: number; h: number }[]>([])
+/** True while the player advances the chapter, so the watcher can tell its
+ *  own navigation from the user jumping in the catalogue. */
+let listenAdvancing = false
+
+const listen = useListenPlayer({
+  sentences: () => listenSentences.value,
+  settings: () => ({
+    rate: settings.value.listenRate,
+    voice: settings.value.listenVoice,
+    autoNextChapter: settings.value.listenAutoNext,
+  }),
+  onSentence: (sentence, i) => {
+    void focusSentence(sentence, i)
+  },
+  onChapterEnd: async () => {
+    const next = currentChapter.value + 1
+    if (next >= chapterList.value.length) return false
+    listenAdvancing = true
+    currentChapter.value = next
+    await renderChapter(0)
+    listenAdvancing = false
+    prepareListenText()
+    return listenSentences.value.length > 0
+  },
+})
+
+/*
+ * Top-level refs so the template can use them unwrapped (`listen.active` would
+ * still be a Ref — the composable's return object is not reactive).
+ */
+const {
+  status: listenStatus,
+  index: listenIndex,
+  reason: listenReason,
+  active: listenActive,
+} = listen
+
+/** Segment the chapter body that is currently laid out. */
+function prepareListenText() {
+  const body = contentEl.value?.querySelector('.reader__body')
+  bodyText.value = body?.textContent || ''
+  listenSentences.value = segmentText(bodyText.value)
+  listenCharOffsets.value = listenSentences.value.map(s => toCharOffset(bodyText.value, s.start))
+}
+
+/** Rectangles covering `[start, end)` of the body, clipped to the visible page. */
+function rectsOf(sentence: Sentence): { x: number; y: number; w: number; h: number }[] {
+  const body = contentEl.value?.querySelector('.reader__body')
+  if (!body) return []
+  const range = rangeForOffsets(body, sentence.start, sentence.end)
+  if (!range) return []
+  const vp = viewportEl.value?.getBoundingClientRect()
+  return [...range.getClientRects()]
+    .map(r => ({ x: r.left, y: r.top, w: r.width, h: r.height }))
+    .filter(r => {
+      if (r.w <= 0.5 || r.h <= 0.5) return false
+      if (!vp) return true
+      // Columns other than the visible one sit outside the viewport; painting
+      // them would draw over the chrome.
+      return r.x + r.w > vp.left && r.x < vp.right && r.y + r.h > vp.top && r.y < vp.bottom
+    })
+}
+
+/**
+ * The page estimate can be a page off (progress is character-derived, not
+ * measured), so step one page at a time until the sentence is on screen.
+ * Bounded at two steps — a bigger miss means the estimate was wrong enough that
+ * jumping around would be worse than leaving the highlight unpainted.
+ */
+async function settlePage(sentence: Sentence) {
+  for (let step = 0; step < 2; step++) {
+    const rects = rectsOf(sentence)
+    if (!rects.length) return
+    const vp = viewportEl.value?.getBoundingClientRect()
+    if (!vp) return
+    if (rects.some(r => r.x + r.w > vp.left && r.x < vp.right)) return
+    goPage(rects[0].x > vp.right ? currentPage.value + 1 : currentPage.value - 1, false)
+    await nextTick()
+  }
+}
+
+async function focusSentence(sentence: Sentence, i: number) {
+  const charOffset = listenCharOffsets.value[i] ?? toCharOffset(bodyText.value, sentence.start)
+  const targetPage = charToPage(charOffset)
+  if (targetPage !== currentPage.value) {
+    goPage(targetPage, false)
+  } else {
+    // Same page still has to refresh the saved position.
+    saveProgress()
+  }
+
+  if (!settings.value.listenFollow) {
+    sentenceRects.value = []
+    return
+  }
+  await nextTick()
+  await settlePage(sentence)
+  sentenceRects.value = rectsOf(sentence)
+}
+
+const listenChapterTitle = computed(() => chapterList.value[currentChapter.value]?.title || '')
+
+/** 按中文语音约 4.2 字/秒粗估剩余时长，只用于界面提示。 */
+const listenRemainText = computed(() => {
+  const list = listenSentences.value
+  if (!list.length) return ''
+  let chars = 0
+  for (let i = listenIndex.value; i < list.length; i++) chars += list[i].text.length
+  const seconds = chars / (4.2 * Math.max(0.5, settings.value.listenRate || 1))
+  if (seconds < 60) return '约 1 分钟内'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `约 ${minutes} 分钟`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return m ? `约 ${h} 小时 ${m} 分钟` : `约 ${h} 小时`
+})
+
+function clearListenTimer() {
+  if (listenTimerId) {
+    clearInterval(listenTimerId)
+    listenTimerId = null
+  }
+  listenTimerLeft.value = 0
+}
+
+function setListenTimer(minutes: number) {
+  clearListenTimer()
+  if (!minutes) return
+  const end = Date.now() + minutes * 60000
+  listenTimerLeft.value = minutes * 60
+  listenTimerId = setInterval(() => {
+    listenTimerLeft.value = Math.max(0, Math.ceil((end - Date.now()) / 1000))
+    if (listenTimerLeft.value <= 0) {
+      clearListenTimer()
+      void listen.pause()
+    }
+  }, 1000)
+}
+
+async function startListening() {
+  showMenu.value = false
+  activePanel.value = 'none'
+  clearSelection()
+  listenExpanded.value = true
+  await nextTick()
+  prepareListenText()
+  if (!listenSentences.value.length) {
+    window.alert('本章没有可朗读的文字')
+    return
+  }
+  // Not awaited: the returned promise settles when the chapter finishes, and
+  // the tap handler must return immediately.
+  void listen.playFromOffset(currentCharOffset.value, listenCharOffsets.value)
+}
+
+function closeListening() {
+  void listen.stop()
+  sentenceRects.value = []
+  listenExpanded.value = true
+  clearListenTimer()
+}
+
+async function setListenVoice(name: string) {
+  await settingsStore.update({ listenVoice: name })
+  void listen.restartCurrent()
+}
+
+async function toggleListenAutoNext() {
+  await settingsStore.update({ listenAutoNext: !settings.value.listenAutoNext })
+}
+
+function openListenCatalog() {
+  listenExpanded.value = false
+  showCatalog.value = true
+}
+
+async function setListenRate(rate: number) {
+  await settingsStore.update({ listenRate: rate })
+  // Re-speak the current sentence so the new speed is audible immediately.
+  void listen.restartCurrent()
+}
+
+async function toggleListenFollow() {
+  await settingsStore.update({ listenFollow: !settings.value.listenFollow })
+  if (!settings.value.listenFollow) sentenceRects.value = []
+  else if (listenActive.value) await focusSentence(
+    listenSentences.value[listenIndex.value] || { start: 0, end: 0, text: '' },
+    listenIndex.value
+  )
+}
+
+// Leaving the chapter by any route other than the player ends listening: the
+// sentence list would otherwise describe text that is no longer on screen.
+watch(currentChapter, () => {
+  if (listenAdvancing) return
+  if (listenActive.value) closeListening()
+})
+
+watch(listenStatus, s => {
+  if (s === 'idle' || s === 'unavailable' || s === 'ended') sentenceRects.value = []
+})
+
 /* ---------- gestures ----------
  * Web vs. native differ in a way that must not be papered over:
  *
@@ -1130,6 +1358,9 @@ function onVisibility() {
 }
 
 onBeforeUnmount(() => {
+  // The speech engine keeps talking after the view is gone unless told to stop.
+  void listen.stop()
+  clearListenTimer()
   if (activeOverlayId.value) closeOverlay(activeOverlayId.value)
   if (autoTimer) clearInterval(autoTimer)
   clearInterval(sessionTimer)
@@ -1229,13 +1460,36 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
     </button>
 
     <!--
+      Follow-along paint for the sentence being spoken. Same overlay approach as
+      the text selection: measured rects, no DOM mutation, so pagination is
+      untouched while the voice moves through the page.
+    -->
+    <!-- 全屏听书页会盖住正文，这一层高亮没必要画；收起后立刻恢复。 -->
+    <template v-if="!listenExpanded">
+      <div
+        v-for="(r, i) in sentenceRects"
+        :key="'s' + i"
+        class="reader__spoken"
+        :style="{ left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' }"
+      />
+    </template>
+
+    <!-- Listen entry: 和工具栏同进同退，避免悬在正文上遮挡阅读。 -->
+    <button
+      v-if="!listenActive && showMenu && !loading && activePanel === 'none' && !showCatalog && !showBookMenu"
+      class="reader__listen-fab"
+      aria-label="听书"
+      @click.stop="startListening"
+    >听</button>
+
+    <!--
       Footer: WeRead leaves the left end blank and puts the position on the
       right. The chapter name used to sit here, but it now heads the chapter
       text itself — keeping both would double it.
     -->
     <div
       class="reader__status"
-      :class="{ 'reader__status--hidden': showMenu, 'reader__status--scroll': isScrollMode }"
+      :class="{ 'reader__status--hidden': showMenu || listenActive, 'reader__status--scroll': isScrollMode }"
     >
       <span class="reader__status-left"></span>
       <span class="reader__status-right">{{ percentText }}</span>
@@ -1251,6 +1505,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
         @more="showBookMenu = true"
       />
       <ReaderBottomBar
+        v-if="!listenExpanded"
         :active="activePanel"
         :note-count="noteCount"
         @catalog="showCatalog = true"
@@ -1340,6 +1595,48 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       />
     </template>
 
+    <!-- Listen UI stays up regardless of the menu: reaching for a control
+         should not require a tap that also opens the chrome. -->
+    <ListenView
+      v-if="listenActive && listenExpanded"
+      :status="listenStatus"
+      :rate="settings.listenRate"
+      :sentence="listenSentences[listenIndex]?.text || ''"
+      :index="listenIndex"
+      :total="listenSentences.length"
+      :chapter-title="listenChapterTitle"
+      :book-title="book?.title || ''"
+      :cover="book?.cover || null"
+      :follow="settings.listenFollow"
+      :auto-next="settings.listenAutoNext"
+      :voice="settings.listenVoice"
+      :remain-text="listenRemainText"
+      :timer-left="listenTimerLeft"
+      :reason="listenReason ? reasonText(listenReason) : undefined"
+      :load-voices="listen.voices"
+      @toggle="listen.toggle()"
+      @prev="listen.prev()"
+      @next="listen.next()"
+      @seek="(i) => listen.seek(i)"
+      @rate="setListenRate"
+      @voice="setListenVoice"
+      @follow="toggleListenFollow"
+      @auto-next="toggleListenAutoNext"
+      @timer="setListenTimer"
+      @catalog="openListenCatalog"
+      @collapse="listenExpanded = false"
+      @close="closeListening"
+    />
+    <ListenBar
+      v-else-if="listenActive"
+      :status="listenStatus"
+      :cover="book?.cover || null"
+      :timer-left="listenTimerLeft"
+      @toggle="listen.toggle()"
+      @expand="listenExpanded = true"
+      @close="closeListening"
+    />
+
     <!-- Text-selection menu: 复制 / 分享 / 全选 / 划线 / 想法 / 网页搜索 -->
     <SelectionToolbar
       v-if="sel"
@@ -1392,6 +1689,47 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   background: rgba(27, 136, 238, 0.28);
   pointer-events: none;
   border-radius: 2px;
+}
+
+/*
+ * The sentence being read. A soft underline rather than a fill: it has to sit
+ * under existing 划线 marks without hiding them, and it moves every few
+ * seconds, so a heavy block would flash.
+ */
+.reader__spoken {
+  position: fixed;
+  /* 正文之上、所有 chrome 之下：不能盖住听书页、底部栏和弹窗。 */
+  z-index: 4;
+  pointer-events: none;
+  border-radius: 2px;
+  background: rgba(27, 136, 238, 0.16);
+  box-shadow: inset 0 -2px 0 rgba(27, 136, 238, 0.6);
+  transition: background-color 200ms ease-out;
+}
+
+/* Listen entry button, floating over the text like WeRead's. */
+.reader__listen-fab {
+  position: absolute;
+  right: 14px;
+  /* 只在工具栏显示时出现，所以要让开 52px 的底部栏。 */
+  bottom: calc(80px + var(--safe-bottom));
+  z-index: 40;
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(20px * var(--app-font-scale));
+  font-weight: 500;
+  color: #fff;
+  background: rgba(28, 28, 32, 0.62);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.reader__listen-fab:active {
+  background: rgba(28, 28, 32, 0.78);
 }
 .sel-handle {
   position: fixed;

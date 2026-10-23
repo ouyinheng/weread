@@ -133,7 +133,38 @@ withDefaults(
     <template v-else-if="name === 'align-left'">
       <path d="M4 6.5h16M4 11h11M4 15.5h16M4 20h11" />
     </template>
+    <!-- Listen bar: stroke-only, same weight as the rest of the set. -->
+    <path v-else-if="name === 'play'" d="M9 5.8 18.6 12 9 18.2Z" />
+    <path v-else-if="name === 'pause'" d="M9.6 5.6v12.8M14.4 5.6v12.8" />
+    <template v-else-if="name === 'skip-back'">
+      <path d="M6.4 5.8v12.4" />
+      <path d="M17.8 6.2 9.4 12l8.4 5.8Z" />
+    </template>
+    <template v-else-if="name === 'skip-forward'">
+      <path d="M17.6 5.8v12.4" />
+      <path d="M6.2 6.2 14.6 12l-8.4 5.8Z" />
+    </template>
+    <template v-else-if="name === 'subtitles'">
+      <rect x="3.4" y="6" width="17.2" height="12" rx="2.4" />
+      <path d="M7.2 11.4h4.2M13.6 11.4h3.2M7.2 14.6h8.4" />
+    </template>
     <path v-else-if="name === 'sort-down'" d="M7 4.6v14.8M3.8 16l3.2 3.4 3.2-3.4M14 5.4h6.2M14 10.4h4.6M14 15.4h3" />
+    <!-- 定时关闭: clock -->
+    <template v-else-if="name === 'timer'">
+      <circle cx="12" cy="12" r="8.2" />
+      <path d="M12 7.4v5.1l3.1 1.9" />
+    </template>
+    <!-- 听书标题 / 音色 -->
+    <template v-else-if="name === 'headphones'">
+      <path d="M4.4 13.4v-1.2a7.6 7.6 0 0115.2 0v1.2" />
+      <path d="M4.4 13.4h2.4v5.2H6a1.6 1.6 0 01-1.6-1.6zM19.6 13.4h-2.4v5.2h.8a1.6 1.6 0 001.6-1.6z" />
+    </template>
+    <!-- 语速: gauge with a needle -->
+    <template v-else-if="name === 'speed'">
+      <path d="M4.6 16.8a8.4 8.4 0 1114.8 0" />
+      <path d="M12 12.6l3.4-2.6" />
+      <circle cx="12" cy="12.6" r="1.2" fill="currentColor" stroke="none" />
+    </template>
     <!--
       Tab glyphs use solid `currentColor` fills for all three entries, so the
       bar reads as one family: an open book, a stack of books, and a person.

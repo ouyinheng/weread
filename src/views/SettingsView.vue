@@ -2,33 +2,57 @@
 /**
  * App settings.
  *
- * Deliberately *not* the reader's typography page: font size, line height,
- * margins, theme colours and background all live in the reader's own bottom
- * panel, where the user can see the effect on the page immediately. Duplicating
- * them here let the two drift apart and made this page feel like a second
- * reader.
+ * Deliberately *not* the reader's typography page: body text size, leading,
+ * margins, reading theme and background live in the reader's own bottom panel,
+ * where the user can see the effect on the page immediately.
  *
- * What remains are settings that belong to the app, plus the four reading
- * behaviours the user asked to keep.
+ * The system tab does own app chrome: the UI font family, the UI font scale and
+ * the app colour scheme. None of them touch `ReaderSettings`.
  */
 import { computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { useSettingsStore } from '@/stores'
+import { useRoute, useRouter } from 'vue-router'
+import { useAppSettingsStore, useSettingsStore } from '@/stores'
 import { useBookStore } from '@/stores'
 import { useSourceStore } from '@/stores/source'
+import type { AppTheme } from '@/types'
 import { fontLabelOf } from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
 import { pickAndImport } from '@/utils/importer'
 import { alertDialog, confirmDialog } from '@/utils/dialog'
 
+const route = useRoute()
 const router = useRouter()
 const store = useSettingsStore()
+const appSettings = useAppSettingsStore()
 const bookStore = useBookStore()
 const sourceStore = useSourceStore()
 
 const s = computed(() => store.settings)
+const app = computed(() => appSettings.app)
+
+const THEME_OPTIONS: { id: AppTheme; label: string }[] = [
+  { id: 'light', label: '浅色' },
+  { id: 'dark', label: '深色' },
+  { id: 'system', label: '跟随系统' },
+]
+
+function setAppTheme(id: AppTheme): void {
+  void appSettings.update({ theme: id })
+}
+
+/** 拖动时先实时改 CSS 变量，松手再落库，避免每移动一点就写一次 IndexedDB。 */
+function previewFontScale(e: Event): void {
+  appSettings.app.fontScale = Number((e.target as HTMLInputElement).value)
+  appSettings.apply()
+}
+
+function saveFontScale(): void {
+  void appSettings.update({ fontScale: appSettings.app.fontScale })
+}
 
 const appVersion = '1.0.0'
+/** 阅读设置只改阅读页；系统设置才会作用于整个应用。「我的」页两个入口各进一页。 */
+const isSystem = route.query.tab === 'system'
 
 onMounted(() => { sourceStore.load() })
 
@@ -81,10 +105,11 @@ function about() {
       <button class="settings-back" @click="router.back()" aria-label="返回">
         <Icon name="back" :size="24" :width="2" />
       </button>
-      <span class="settings-title">设置</span>
+      <span class="settings-title">{{ isSystem ? '系统设置' : '阅读设置' }}</span>
     </header>
 
     <div class="settings-body">
+      <template v-if="!isSystem">
       <!--
         Reading behaviour: these are app-level policies, not page styling.
         Order follows WeRead's list (不自动锁屏 → 允许横屏 → 时间和电量 → 音量键),
@@ -141,6 +166,37 @@ function about() {
         </div>
       </div>
 
+      <!-- 听书: the engine itself is the phone's, so there is nothing to set up
+           here — only how the reader behaves while it speaks. -->
+      <div class="settings-group">
+        <div class="settings-row settings-row--toggle">
+          <span class="settings-label">听书时跟随高亮</span>
+          <button
+            class="toggle"
+            :class="{ on: s.listenFollow }"
+            role="switch"
+            :aria-checked="s.listenFollow"
+            aria-label="听书时跟随高亮"
+            @click="store.update({ listenFollow: !s.listenFollow })"
+          >
+            <span class="toggle__dot" />
+          </button>
+        </div>
+        <div class="settings-row settings-row--toggle">
+          <span class="settings-label">听完本章自动播下一章</span>
+          <button
+            class="toggle"
+            :class="{ on: s.listenAutoNext }"
+            role="switch"
+            :aria-checked="s.listenAutoNext"
+            aria-label="听完本章自动播下一章"
+            @click="store.update({ listenAutoNext: !s.listenAutoNext })"
+          >
+            <span class="toggle__dot" />
+          </button>
+        </div>
+      </div>
+
       <!-- Typography entry: the face picker is its own page, like WeRead's. -->
       <div class="settings-group">
         <button class="settings-cell" @click="router.push({ name: 'fontSettings' })">
@@ -150,9 +206,53 @@ function about() {
         </button>
       </div>
 
-      <p class="settings-hint">
-        字号、背景、行距等排版设置请在阅读页底部「字体」「亮度」中调整，改动会立即显示在正文上。
-      </p>
+      </template>
+
+      <template v-else>
+      <!-- 界面外观：只改应用外壳，阅读页的字号/字体/主题仍由阅读设置决定。 -->
+      <div class="settings-group">
+        <button
+          class="settings-cell"
+          @click="router.push({ name: 'fontSettings', query: { scope: 'app' } })"
+        >
+          <span class="settings-cell-label">字体</span>
+          <span class="settings-cell-value">{{ fontLabelOf(app.fontFamily) }}</span>
+          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
+        </button>
+
+        <div class="settings-row settings-row--scale">
+          <span class="settings-label">字体大小</span>
+          <div class="font-scale">
+            <span class="font-scale__a font-scale__a--small">A</span>
+            <input
+              class="font-scale__slider"
+              type="range"
+              min="0.85"
+              max="1.35"
+              step="0.05"
+              :value="app.fontScale"
+              aria-label="界面字体大小"
+              @input="previewFontScale"
+              @change="saveFontScale"
+            />
+            <span class="font-scale__a font-scale__a--large">A</span>
+            <span class="font-scale__value">{{ Math.round(app.fontScale * 100) }}%</span>
+          </div>
+        </div>
+
+        <div class="settings-row settings-row--theme">
+          <span class="settings-label">主题色</span>
+          <div class="theme-options">
+            <button
+              v-for="t in THEME_OPTIONS"
+              :key="t.id"
+              class="theme-option"
+              :class="{ 'theme-option--on': app.theme === t.id }"
+              @click="setAppTheme(t.id)"
+            >{{ t.label }}</button>
+          </div>
+        </div>
+      </div>
 
       <!-- 网络书源：默认关闭，首次开启时说明会联网 -->
       <div class="settings-group">
@@ -169,10 +269,6 @@ function about() {
           </button>
         </div>
       </div>
-
-      <p class="settings-hint">
-        网络书源关闭时不发任何请求；开启后仅在搜索、加入书架、阅读未缓存章节和书源体检时联网。
-      </p>
 
       <!-- Library -->
       <div class="settings-group">
@@ -196,7 +292,7 @@ function about() {
         </button>
       </div>
 
-      <p class="settings-note">所有数据仅保存在本机，不上传服务器。</p>
+      </template>
     </div>
   </div>
 </template>
@@ -345,17 +441,69 @@ function about() {
   flex-shrink: 0;
 }
 
-.settings-hint {
-  padding: 0 4px;
+.settings-row--scale,
+.settings-row--theme {
+  min-height: 58px;
+}
+
+.settings-row--theme .settings-label {
+  flex-shrink: 0;
+}
+
+.font-scale {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.font-scale__a {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.font-scale__a--small {
   font-size: calc(12px * var(--app-font-scale));
-  line-height: 1.6;
+}
+
+.font-scale__a--large {
+  font-size: calc(18px * var(--app-font-scale));
+}
+
+.font-scale__slider {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+.font-scale__value {
+  width: 36px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: calc(12px * var(--app-font-scale));
   color: var(--text-secondary);
 }
 
-.settings-note {
-  padding: 0 4px 8px;
-  font-size: calc(11px * var(--app-font-scale));
-  line-height: 1.6;
+.theme-options {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.theme-option {
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: rgba(120, 120, 128, 0.1);
+  font-size: calc(12px * var(--app-font-scale));
   color: var(--text-secondary);
 }
+
+.theme-option--on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 </style>

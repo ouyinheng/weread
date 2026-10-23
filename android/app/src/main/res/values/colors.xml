@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash ground: the same ink the app icon is bound in. -->
+    <color name="splash_background">#1B3A5C</color>
+</resources>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, onDeactivated, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onDeactivated, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBookStore } from '@/stores'
 import type { Book } from '@/types'
@@ -49,8 +49,6 @@ const sortedBooks = computed(() => {
   }
 })
 
-const searchQuery = ref('')
-const searching = ref(false)
 /** Multi-select mode; WeRead's 「选择」 toggles bulk actions on the shelf. */
 const selectMode = ref(false)
 const selected = ref<Set<string>>(new Set())
@@ -79,27 +77,6 @@ onDeactivated(() => {
   selectMode.value = false
 })
 onBeforeUnmount(() => { uiState.hideTabBar = false })
-
-const visibleBooks = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase()
-  if (!q) return sortedBooks.value
-  return sortedBooks.value.filter(b =>
-    b.title.toLowerCase().includes(q) || (b.author || '').toLowerCase().includes(q)
-  )
-})
-
-const searchInputEl = ref<HTMLInputElement>()
-
-async function openSearch() {
-  searching.value = true
-  await nextTick()
-  searchInputEl.value?.focus()
-}
-
-function closeSearch() {
-  searching.value = false
-  searchQuery.value = ''
-}
 
 /**
  * Open a book with the standard "cover grows into the page" motion.
@@ -187,13 +164,13 @@ async function confirmDelete(book: Book) {
 
 /* ---------- bulk actions (select mode) ---------- */
 const allSelected = computed(
-  () => visibleBooks.value.length > 0 && visibleBooks.value.every(b => selected.value.has(b.id))
+  () => sortedBooks.value.length > 0 && sortedBooks.value.every(b => selected.value.has(b.id))
 )
 
 function toggleSelectAll() {
   selected.value = allSelected.value
     ? new Set()
-    : new Set(visibleBooks.value.map(b => b.id))
+    : new Set(sortedBooks.value.map(b => b.id))
 }
 
 async function removeSelected() {
@@ -221,22 +198,11 @@ onMounted(() => {
 <template>
   <div class="shelf tab-page" :class="{ 'shelf--selecting': selectMode }">
     <header class="shelf__header">
-      <div v-if="!searching" class="shelf__search" @click="openSearch">
+      <div class="shelf__search" @click="router.push({ name: 'search' })">
         <Icon name="search" :size="17" />
         <span class="shelf__search-text">搜本书</span>
         <span class="shelf__search-divider" />
-        <button class="shelf__search-store" @click.stop="router.push('/discover')">书城</button>
-      </div>
-      <div v-else class="shelf__search shelf__search--active">
-        <Icon name="search" :size="17" />
-        <input
-          ref="searchInputEl"
-          v-model="searchQuery"
-          placeholder="搜书名 / 作者"
-          enterkeyhint="search"
-          @keydown.esc="closeSearch"
-        />
-        <button class="shelf__search-cancel" @click="closeSearch">取消</button>
+        <button class="shelf__search-store" @click.stop="router.push({ name: 'search' })">书城</button>
       </div>
     </header>
 
@@ -258,7 +224,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="!searching" class="shelf__tabs">
+    <div class="shelf__tabs">
       <button
         v-for="t in sortTabs"
         :key="t.key"
@@ -283,14 +249,9 @@ onMounted(() => {
         <button class="shelf__empty-btn" @click="importFromDevice">导入书籍</button>
       </div>
 
-      <div v-else-if="visibleBooks.length === 0" class="shelf__empty">
-        <p class="shelf__empty-title">没有匹配的书</p>
-        <p class="shelf__empty-desc">换个书名或作者试试</p>
-      </div>
-
       <div v-else class="shelf__grid">
         <div
-          v-for="book in visibleBooks"
+          v-for="book in sortedBooks"
           :key="book.id"
           class="shelf__item"
           :class="{ 'shelf__item--selected': selected.has(book.id) }"
@@ -387,11 +348,6 @@ onMounted(() => {
   min-width: 0;
 }
 
-.shelf__search--active {
-  background: var(--bg-panel);
-  box-shadow: 0 0 0 1.5px var(--accent-soft-strong);
-}
-
 .shelf__search-text {
   overflow: hidden;
   white-space: nowrap;
@@ -446,25 +402,6 @@ onMounted(() => {
   font-size: calc(15px * var(--app-font-scale));
   color: var(--text);
 }
-
-.shelf__search input {
-  flex: 1;
-  min-width: 0;
-  font-size: calc(15px * var(--app-font-scale));
-  color: var(--text);
-}
-
-.shelf__search input::placeholder {
-  color: var(--text-secondary);
-}
-
-.shelf__search-cancel {
-  flex-shrink: 0;
-  font-size: calc(15px * var(--app-font-scale));
-  color: var(--accent);
-  padding-left: 4px;
-}
-
 
 /* ---------- sort tabs ---------- */
 .shelf__tabs {

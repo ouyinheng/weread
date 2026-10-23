@@ -21,7 +21,26 @@
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 
+    <!--
+      Launch theme.
+
+      Two completely different splash mechanisms live here, and only setting
+      one of them is why the designed splash "did not take":
+
+      - Android 12+ draws its own splash from `windowSplashScreenBackground` +
+        `windowSplashScreenAnimatedIcon` and **ignores `android:background`**.
+        With neither attribute set it fell back to a plain window colour, so the
+        phone showed a blank screen instead of the artwork.
+      - Android 11 and below paint the window with `android:background`, which
+        is the full-bleed splash bitmap.
+
+      `postSplashScreenTheme` hands the activity over to the real theme once the
+      splash is done; without it the activity would keep a splash theme forever.
+    -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
         <item name="android:background">@drawable/splash</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

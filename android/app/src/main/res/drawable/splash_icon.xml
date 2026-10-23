@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The book mark used by the Android 12+ system splash
+  (`windowSplashScreenAnimatedIcon`).
+
+  It has to be a drawable, not the PNG the splash bitmap uses, because the
+  system composes this itself: it scales the icon to 288dp and masks it to a
+  192dp circle, so the art must stay inside the middle two thirds. The glyph
+  occupies roughly the middle half of this 108dp canvas.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- left page -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.97"
+        android:pathData="M52.2,44.6 C45.4,38.4 36.2,35.9 29.2,37.6 L29.2,67.4 C36.2,65.7 45.4,68.2 52.2,72.6 Z" />
+    <!-- right page -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.97"
+        android:pathData="M55.8,44.6 C62.6,38.4 71.8,35.9 78.8,37.6 L78.8,67.4 C71.8,65.7 62.6,68.2 55.8,72.6 Z" />
+    <!-- spine shadow -->
+    <path
+        android:fillColor="#12283F"
+        android:fillAlpha="0.22"
+        android:pathData="M52.8,45.2 L55.2,45.2 L55.2,71.6 L52.8,71.6 Z" />
+    <!-- bookmark ribbon -->
+    <path
+        android:fillColor="#E3B15C"
+        android:pathData="M66.6,38.4 L66.6,57.8 L71.2,52.4 L75.8,57.8 L75.8,38.4 Z" />
+</vector>

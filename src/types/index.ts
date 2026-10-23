@@ -58,6 +58,15 @@ export interface ReaderSettings {
   volumeKeyTurn: boolean
   landscape: boolean
   noAutoLock: boolean
+  /* ---- 听书 ---- */
+  /** Speech rate, 0.5–3.0. */
+  listenRate: number
+  /** Engine voice name; empty means the engine default. */
+  listenVoice: string
+  /** Roll into the next chapter when the current one is finished. */
+  listenAutoNext: boolean
+  /** Paint the follow-along highlight and turn the page with the voice. */
+  listenFollow: boolean
 }
 
 /**
@@ -72,10 +81,11 @@ export interface AppSettings {
   fontScale: number
   /** Chrome font family id, from FONT_OPTIONS. */
   fontFamily: string
-  /** Follow the OS dark-mode preference for the whole app. */
-  followSystemTheme: boolean
+  /** Whole-app colour scheme; the reader's own theme stays independent. */
+  theme: AppTheme
 }
 
+export type AppTheme = 'system' | 'light' | 'dark'
 export type ThemeId = 'white' | 'yellow' | 'green' | 'black'
 export type BackgroundId = 'plain' | 'paper' | 'grid' | 'desert' | 'sky'
 export type TurnPageType = 'horizontal' | 'vertical' | 'simulation' | 'cover'

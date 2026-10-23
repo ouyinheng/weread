@@ -166,7 +166,7 @@ async function removeSource(): Promise<void> {
         <button class="src-edit" @click="openEdit">编辑原始 JSON</button>
       </div>
 
-      <button v-if="!source.builtin" class="src-remove" @click="removeSource">删除书源</button>
+      <button class="src-remove" @click="removeSource">删除书源</button>
     </main>
 
     <main v-else class="src-detail__body">

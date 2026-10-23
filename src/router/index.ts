@@ -5,7 +5,7 @@ import { isTabRoute, tabIndex } from './tabs'
 export function routeDepth(name: unknown): number {
   const n = String(name || '')
   if (n === 'reader' || n === 'sourceDetail') return 3
-  if (n === 'catalog' || n === 'settings' || n === 'sourceList') return 2
+  if (n === 'catalog' || n === 'settings' || n === 'sourceList' || n === 'search') return 2
   if (n === 'fontSettings') return 3
   return 1
 }
@@ -13,7 +13,9 @@ export function routeDepth(name: unknown): number {
 const routes = [
   { path: '/', redirect: '/shelf' },
   { path: '/shelf', name: 'shelf', component: () => import('@/views/ShelfView.vue'), meta: { tab: 'shelf' } },
-  { path: '/discover', name: 'discover', component: () => import('@/views/DiscoverView.vue'), meta: { tab: 'discover' } },
+  { path: '/search', name: 'search', component: () => import('@/views/SearchView.vue') },
+  // 发现页暂时下线，旧链接统一落到搜索页。
+  { path: '/discover', redirect: '/search' },
   { path: '/me', name: 'me', component: () => import('@/views/MeView.vue'), meta: { tab: 'me' } },
   { path: '/reader/:id', name: 'reader', component: () => import('@/views/ReaderView.vue') },
   { path: '/catalog/:id', name: 'catalog', component: () => import('@/views/CatalogView.vue') },

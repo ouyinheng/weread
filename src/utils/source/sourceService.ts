@@ -17,7 +17,6 @@ import {
   dbPutMany,
 } from '@/utils/db'
 import { useBookStore } from '@/stores'
-import builtinSources from './builtin/wtzw.json'
 import { absUrl, extract, query } from './selector'
 import {
   loadBook,
@@ -64,7 +63,7 @@ function baseUrlOf(rawUrl: string): string {
   return rawUrl.split('#')[0].trim().replace(/\/+$/, '')
 }
 
-function normalizeOne(obj: any, builtin: boolean): BookSource | null {
+function normalizeOne(obj: any): BookSource | null {
   if (!obj || typeof obj !== 'object') return null
   const rawUrl = String(obj.bookSourceUrl || '').trim()
   if (!rawUrl) return null
@@ -84,36 +83,35 @@ function normalizeOne(obj: any, builtin: boolean): BookSource | null {
     health: 0,
     lastCheckAt: 0,
     lastError: '',
-    builtin,
     createdAt: Date.now(),
   }
 }
 
-function normalizePayload(payload: unknown, builtin: boolean): BookSource[] {
-  const list = Array.isArray(payload) ? payload : [payload]
+/** 合集 JSON 可能是裸数组，也可能包一层 sources / data / list。 */
+function payloadItems(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload
+  if (payload && typeof payload === 'object') {
+    const obj = payload as Record<string, unknown>
+    for (const key of ['sources', 'bookSources', 'data', 'list', 'items']) {
+      if (Array.isArray(obj[key])) return obj[key] as unknown[]
+    }
+    return [payload]
+  }
+  return []
+}
+
+function normalizePayload(payload: unknown): BookSource[] {
   const out: BookSource[] = []
-  for (const item of list) {
-    const s = normalizeOne(item, builtin)
+  for (const item of payloadItems(payload)) {
+    const s = normalizeOne(item)
     if (s) out.push(s)
   }
   return out
 }
 
-/** 首次启动把实测过的内置源装进库；用户已有同 id 的记录不会被覆盖。 */
-export async function ensureBuiltinSources(): Promise<number> {
-  const all = await dbGetAll<BookSource>('sources')
-  const ids = new Set(all.map(s => s.id))
-  const rows = normalizePayload(builtinSources, true).filter(s => !ids.has(s.id))
-  if (rows.length) await dbPutMany('sources', rows)
-  return rows.length
-}
-
 export async function listSources(): Promise<BookSource[]> {
   const all = await dbGetAll<BookSource>('sources')
-  return all.sort((a, b) => {
-    if (a.builtin !== b.builtin) return a.builtin ? -1 : 1
-    return a.name.localeCompare(b.name, 'zh-CN')
-  })
+  return all.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
 }
 
 export function getSource(id: string): Promise<BookSource | undefined> {
@@ -129,26 +127,78 @@ export async function setSourceEnabled(id: string, enabled: boolean): Promise<vo
 export async function deleteSource(id: string): Promise<void> {
   const s = await getSource(id)
   if (!s) return
-  if (s.builtin) throw new SourceError('SRC_DISABLED', '内置书源不可删除，可以停用')
   await dbDelete('sources', id)
 }
 
-/**
- * 从粘贴的 JSON 或 URL 导入。外链支持单个对象或数组；非文本书源直接跳过。
- */
-export async function importSourcesFromText(text: string): Promise<number> {
-  const trimmed = text.trim()
-  if (!trimmed) throw new SourceError('RULE_EMPTY', '没有可导入的内容')
+export interface ImportResult {
+  /** JSON 里的条目总数。 */
+  total: number
+  /** 去重后真正落库的文本书源数。 */
+  imported: number
+  /** 音频 / 图片 / 文件类或字段不全，被跳过的条目数。 */
+  skipped: number
+}
 
-  let jsonText = trimmed
-  if (/^https?:\/\//i.test(trimmed) && !/^[\[{]/.test(trimmed)) {
-    // 从地址导入也是一次联网：沿用总开关，避免「关着网络却发请求」。
-    if (!(await loadNetworkEnabled())) {
-      throw new SourceError('SRC_DISABLED', '从地址导入需要先开启网络书源，或直接粘贴 JSON')
+function base64Text(b64: string): string {
+  const bin = atob(b64.replace(/\s+/g, ''))
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
+type ImportSource =
+  | { kind: 'text'; value: string }
+  | { kind: 'url'; value: string }
+
+/**
+ * 识别四种常见写法：粘贴的 JSON、JSON 直链、`legado://import/bookSource?src=`
+ * 分享链接、以及 `data:application/json;base64,` 内嵌数据。
+ */
+function parseImportSource(text: string): ImportSource {
+  const t = text.trim()
+
+  if (/^[a-z][a-z0-9+.-]*:\/\/import\/bookSource/i.test(t)) {
+    const m = /[?&]src=([^&#]+)/i.exec(t)
+    if (m) {
+      try {
+        return parseImportSource(decodeURIComponent(m[1]))
+      } catch {
+        return { kind: 'text', value: m[1] }
+      }
     }
-    const r = await httpGet(trimmed, { timeout: 15000 })
+  }
+
+  const data = /^data:application\/json[^,]*;base64,/i.exec(t)
+  if (data) return { kind: 'text', value: base64Text(t.slice(data[0].length)) }
+
+  if (/^https?:\/\//i.test(t) && !/^[\[{]/.test(t)) return { kind: 'url', value: t }
+  return { kind: 'text', value: t }
+}
+
+/**
+ * 导入书源。链接导入是用户主动发起的一次联网请求，不受「网络书源」总开关
+ * 限制（总开关约束的是搜索、阅读、体检这些后台请求）。
+ *
+ * 大合集（全量池约 3900 条 / 20MB）会分批落库，避免一次事务卡死页面。
+ */
+export async function importSourcesFromText(text: string): Promise<ImportResult> {
+  const src = parseImportSource(text)
+  let jsonText = src.value
+  if (!jsonText.trim()) throw new SourceError('RULE_EMPTY', '没有可导入的内容')
+
+  if (src.kind === 'url') {
+    const r = await httpGet(src.value, {
+      timeout: 60000,
+      headers: { Accept: 'application/json,text/plain,*/*' },
+    })
     if (r.status !== 200) throw new SourceError('NET_HTTP', `书源地址返回 HTTP ${r.status}`)
     jsonText = r.text
+  }
+
+  jsonText = jsonText.replace(/^\uFEFF/, '').trim()
+  if (!jsonText) throw new SourceError('RULE_EMPTY', '书源内容为空')
+  if (/^</.test(jsonText)) {
+    throw new SourceError('RULE_EMPTY', '该地址返回的是网页，不是书源 JSON')
   }
 
   let parsed: unknown
@@ -158,19 +208,34 @@ export async function importSourcesFromText(text: string): Promise<number> {
     throw new SourceError('RULE_EMPTY', '书源 JSON 解析失败')
   }
 
-  const rows = normalizePayload(parsed, false)
+  const items = payloadItems(parsed)
+  if (!items.length) throw new SourceError('RULE_EMPTY', '文件里没有书源')
+
+  const rows = normalizePayload(parsed)
   if (!rows.length) throw new SourceError('RULE_EMPTY', '没有可导入的文本书源')
 
+  // 同一份合集里可能有重复 bookSourceUrl，先去重再落库。
+  const byId = new Map<string, BookSource>()
+  for (const row of rows) byId.set(row.id, row)
+
   const existing = new Map((await dbGetAll<BookSource>('sources')).map(s => [s.id, s]))
-  const merged = rows.map(s => {
+  const merged = Array.from(byId.values()).map(s => {
     const old = existing.get(s.id)
-    // 重新导入同一地址时保留内置标记与体检结果，只更新规则。
+    // 重新导入同一地址时保留体检结果，只更新规则。
     return old
-      ? { ...s, builtin: old.builtin, health: old.health, lastCheckAt: old.lastCheckAt, lastError: old.lastError }
+      ? { ...s, health: old.health, lastCheckAt: old.lastCheckAt, lastError: old.lastError }
       : s
   })
-  await dbPutMany('sources', merged)
-  return merged.length
+
+  for (let i = 0; i < merged.length; i += 200) {
+    await dbPutMany('sources', merged.slice(i, i + 200))
+  }
+
+  return {
+    total: items.length,
+    imported: merged.length,
+    skipped: Math.max(0, items.length - merged.length),
+  }
 }
 
 /** 直接编辑原始 JSON。地址变了就换主键，避免旧记录残留。 */
@@ -181,12 +246,11 @@ export async function updateSourceRaw(id: string, jsonText: string): Promise<Boo
   } catch {
     throw new SourceError('RULE_EMPTY', 'JSON 格式错误')
   }
-  const next = normalizeOne(obj, false)
+  const next = normalizeOne(obj)
   if (!next) throw new SourceError('RULE_EMPTY', '缺少 bookSourceUrl，或不是文本书源')
 
   const prev = await getSource(id)
   if (!prev) throw new SourceError('SRC_NOT_FOUND')
-  next.builtin = prev.builtin
   next.health = prev.health
   next.lastCheckAt = prev.lastCheckAt
   next.lastError = prev.lastError
@@ -214,19 +278,43 @@ export interface SearchFailure {
 export interface SearchOutcome {
   hits: SearchHit[]
   failures: SearchFailure[]
+  /** 本次真正发过请求的书源数。 */
+  searched: number
+  /** 启用中的可搜索书源总数。 */
+  total: number
 }
+
+/**
+ * 一次搜索最多覆盖的书源数。
+ *
+ * 全量合集动辄三四千条，全部并发既会被源站封 IP，也会让用户等上几分钟。
+ * 按「可用 → 未检测 → 降级」排序后取前 N 个，并在 UI 上说明范围。
+ */
+export const SEARCH_SOURCE_LIMIT = 20
 
 function canSearch(s: BookSource): boolean {
   return s.type === 0 && !!s.raw?.searchUrl && !!s.raw?.ruleSearch?.bookList
 }
 
+function rankSources(list: BookSource[]): BookSource[] {
+  const score = (s: BookSource): number => {
+    if (s.health === 1) return 0
+    if (s.health === 0) return 1
+    return 2
+  }
+  return [...list].sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name, 'zh-CN'))
+}
+
 export async function searchAll(key: string): Promise<SearchOutcome> {
   const word = key.trim()
-  if (!word) return { hits: [], failures: [] }
-  if (!(await loadNetworkEnabled())) return { hits: [], failures: [] }
+  if (!word) return { hits: [], failures: [], searched: 0, total: 0 }
+  if (!(await loadNetworkEnabled())) return { hits: [], failures: [], searched: 0, total: 0 }
 
   const usable = (await listSources()).filter(s => s.enabled && canSearch(s))
-  const results = await Promise.all(usable.map(async (s): Promise<{ s: BookSource; hits: SearchHit[]; error?: string }> => {
+  // 标红的源不再浪费一次等待；全部标红时才回退到全部。
+  const alive = usable.filter(s => s.health !== 3)
+  const picked = rankSources(alive.length ? alive : usable).slice(0, SEARCH_SOURCE_LIMIT)
+  const results = await Promise.all(picked.map(async (s): Promise<{ s: BookSource; hits: SearchHit[]; error?: string }> => {
     try {
       const hits = await withTimeout(search(makeCtx(s), word), 12000)
       return { s, hits }
@@ -249,7 +337,7 @@ export async function searchAll(key: string): Promise<SearchOutcome> {
       if (r.s.health !== 1) markHealth(r.s.id, 1, '').catch(() => undefined)
     }
   }
-  return { hits, failures }
+  return { hits, failures, searched: picked.length, total: usable.length }
 }
 
 /* ---------- 加入书架 ---------- */

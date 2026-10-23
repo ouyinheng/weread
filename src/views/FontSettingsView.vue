@@ -8,15 +8,19 @@
  * the effect on a real page.
  */
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { useSettingsStore } from '@/stores'
+import { useRoute, useRouter } from 'vue-router'
+import { useAppSettingsStore, useSettingsStore } from '@/stores'
 import { FONT_GROUPS, FONT_OPTIONS, fontLabelOf, fontStackOf, type FontGroup } from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
 
+const route = useRoute()
 const router = useRouter()
 const store = useSettingsStore()
+const appStore = useAppSettingsStore()
 
-const selected = computed(() => store.settings.fontFamily)
+/** 系统设置里的「字体」带 scope=app，只改界面；阅读设置里的字体不带参数。 */
+const isApp = computed(() => route.query.scope === 'app')
+const selected = computed(() => (isApp.value ? appStore.app.fontFamily : store.settings.fontFamily))
 const group = ref<FontGroup | 'all'>('all')
 
 const tabs = computed(() => {
@@ -32,7 +36,8 @@ const shown = computed(() =>
 )
 
 function choose(id: string) {
-  store.update({ fontFamily: id })
+  if (isApp.value) void appStore.update({ fontFamily: id })
+  else void store.update({ fontFamily: id })
 }
 </script>
 
@@ -42,7 +47,7 @@ function choose(id: string) {
       <button class="font-back" aria-label="返回" @click="router.back()">
         <Icon name="back" :size="24" :width="2" />
       </button>
-      <span class="font-title">字体</span>
+      <span class="font-title">{{ isApp ? '界面字体' : '字体' }}</span>
     </header>
 
     <div class="font-body">
@@ -81,7 +86,7 @@ function choose(id: string) {
         </button>
       </div>
 
-      <p class="font-note">字号、边距、行距请在阅读页底部「字体」面板调整，改动会立即显示在正文上。</p>
+      <p v-if="!isApp" class="font-note">字号、边距、行距请在阅读页底部「字体」面板调整，改动会立即显示在正文上。</p>
     </div>
   </div>
 </template>

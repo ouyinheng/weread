@@ -9,7 +9,7 @@ import {
   loadHighlights,
   removeHighlight,
 } from '@/utils/highlights'
-import type { Book, Chapter, Highlight } from '@/types'
+import type { Book, Chapter, Highlight, HighlightColor } from '@/types'
 import { ensureChapterText, restorePosition } from '@/utils/source/sourceService'
 import ReaderTopBar from '@/components/reader/ReaderTopBar.vue'
 import ReaderBottomBar from '@/components/reader/ReaderBottomBar.vue'
@@ -19,6 +19,7 @@ import ThemePanel from '@/components/reader/ThemePanel.vue'
 import ProgressPanel from '@/components/reader/ProgressPanel.vue'
 import NotesPanel from '@/components/reader/NotesPanel.vue'
 import SelectionToolbar from '@/components/reader/SelectionToolbar.vue'
+import BookSearchPanel from '@/components/reader/BookSearchPanel.vue'
 import ListenBar from '@/components/reader/ListenBar.vue'
 import ListenView from '@/components/reader/ListenView.vue'
 import LoadingDots from '@/components/LoadingDots.vue'
@@ -29,7 +30,9 @@ import { reasonText } from '@/audio/tts'
 import { fontStackOf, backgroundOf } from '@/utils/fonts'
 import { addReadingTime, getReadingTime, formatDuration } from '@/utils/reading-time'
 import { needsRebuild, rebuildBook } from '@/utils/library'
-import { isNativeShell, EDGE_GESTURE_INSET } from '@/utils/native'
+import type { BookSearchHit } from '@/utils/book-search'
+import { useBookSearch } from '@/composables/useBookSearch'
+import { isNativeShell, EDGE_GESTURE_INSET, applyReaderNativeMode, resetReaderNativeMode } from '@/utils/native'
 import { openOverlay, closeOverlay } from '@/utils/ui-state'
 import {
   countChars,
@@ -58,6 +61,7 @@ const contentEl = ref<HTMLElement>()
 const showMenu = ref(false)
 const showBookMenu = ref(false)
 const showCatalog = ref(false)
+const showSearch = ref(false)
 const activePanel = ref<ReaderPanel>('none')
 const loading = ref(true)
 
@@ -72,6 +76,8 @@ const totalPages = ref(1)
 /* 在线章节按需抓取时的状态（本地书始终为空） */
 const fetchingChapter = ref(false)
 const chapterError = ref('')
+/** 超大章节重新分页时先让 loading 画出来，再进入同步排版。 */
+const paginating = ref(false)
 
 /* ---------- character bookkeeping ----------
  * Progress is stored as (chapterIndex, charOffset) — the same model WeRead uses
@@ -294,9 +300,11 @@ function applySelectionRange(start: number, end: number) {
 
   const x = first ? first.x + first.w / 2 : window.innerWidth / 2
   const y = first ? first.y - 8 : 120
+  // The bar now carries a colour row too, so it is taller than the old two-row
+  // menu; keep enough headroom that it never slides under the status bar.
   selPos.value = {
     x: Math.min(Math.max(x, 130), window.innerWidth - 130),
-    y: Math.max(y, 110),
+    y: Math.max(y, 152),
   }
 }
 
@@ -331,7 +339,7 @@ const allSelected = computed(() => {
   return sel.value.start === 0 && sel.value.end >= (body.textContent || '').length
 })
 
-async function saveHighlight(note: string) {
+async function saveHighlight(note: string, color: HighlightColor = 'blue') {
   const r = sel.value
   if (!r) return
   const row = await addHighlight({
@@ -341,9 +349,19 @@ async function saveHighlight(note: string) {
     end: r.end,
     text: r.text,
     note,
+    color,
   })
   highlights.value = [...highlights.value, row]
   clearSelection()
+}
+
+/** Adapters for the two selection-bar buttons (事件带颜色参数). */
+function onHighlight(color: HighlightColor): void {
+  void saveHighlight('', color)
+}
+
+function onNote(text: string, color: HighlightColor): void {
+  void saveHighlight(text, color)
 }
 
 async function deleteHighlight(id: string) {
@@ -519,12 +537,25 @@ const renderedHtml = computed(() => {
   return head + wrapped
 })
 
+/**
+ * A transient range painted after jumping from 书内搜索, so the user sees where
+ * the match landed instead of guessing a page. It lives outside `highlights`
+ * because it is not a saved note and must not reach the database.
+ */
+const searchHit = ref<{ chapterIndex: number; start: number; end: number } | null>(null)
+let searchHitTimer: ReturnType<typeof setTimeout> | null = null
+
 /** Highlights belonging to the chapter currently on screen. */
-const highlightRanges = computed(() =>
-  highlights.value
+const highlightRanges = computed(() => {
+  const list: { start: number; end: number; color?: HighlightColor }[] = highlights.value
     .filter(h => h.chapterIndex === currentChapter.value)
-    .map(h => ({ start: h.start, end: h.end }))
-)
+    .map(h => ({ start: h.start, end: h.end, color: h.color }))
+  const hit = searchHit.value
+  if (hit && hit.chapterIndex === currentChapter.value && hit.end > hit.start) {
+    list.push({ start: hit.start, end: hit.end })
+  }
+  return list
+})
 
 /**
  * CJK text justifies cleanly (fixed em widths); Latin text looks better ragged
@@ -569,6 +600,20 @@ const percentText = computed(() => `${Math.round(percentValue.value)}%`)
 const remainText = computed(() => {
   if (!bookChars.value) return ''
   return remainTextOf(remainingMinutes(chapterChars.value, currentChapter.value, currentCharOffset.value))
+})
+
+/**
+ * Reader brightness.
+ *
+ * There is no page-level brightness API in a WebView (and the native window
+ * brightness needs a plugin), so the reader dims itself: a black veil whose
+ * opacity grows as the slider goes down. `-1` still means "follow the system"
+ * and paints nothing, so an untouched install looks exactly as before.
+ */
+const dimOpacity = computed(() => {
+  const v = settings.value.brightness
+  if (v < 0) return 0
+  return Math.min(0.6, Math.max(0, (100 - v) / 100 * 0.6))
 })
 
 /* ---------- pagination ---------- */
@@ -664,6 +709,33 @@ async function retryChapter(): Promise<void> {
 }
 
 /**
+ * Prefetch the next online chapter in the background.
+ *
+ * The biggest source-reading stall is the round trip when a page turn crosses
+ * into an uncached chapter. Fetching one chapter ahead while the reader is
+ * still on the current one makes that turn local; failures stay silent because
+ * the normal on-demand fetch remains the fallback.
+ */
+const prefetching = new Set<number>()
+
+function prefetchNextChapter(index: number): void {
+  const b = book.value
+  if (!b?.sourceId) return
+  const next = index + 1
+  if (next >= chapterList.value.length) return
+  if (chapterHtml.value.has(next) || prefetching.has(next)) return
+  prefetching.add(next)
+  setTimeout(() => {
+    void ensureChapterText(b, next)
+      .then(res => {
+        if (res.html && !chapterHtml.value.has(next)) chapterHtml.value.set(next, res.html)
+      })
+      .catch(() => undefined)
+      .finally(() => prefetching.delete(next))
+  }, 600)
+}
+
+/**
  * Re-layout the current chapter and land on the page holding `charOffset`.
  * Callers pass a character offset (font-size independent) rather than a page.
  */
@@ -678,6 +750,19 @@ async function renderChapter(charOffset = 0) {
   }
   // 抓取期间用户可能已经翻到别的章，旧的那次不要再排版。
   if (index !== currentChapter.value) return
+
+  /*
+   * A chapter with tens of thousands of characters makes CSS multicol block the
+   * main thread. Paint the notice first (two frames), then let the layout run;
+   * the flag clears on the next tick after it.
+   */
+  const heavy = (chapterChars.value[index] || 0) > 30000
+  if (heavy) {
+    paginating.value = true
+    await nextTick()
+    await new Promise(r => setTimeout(r, 16))
+    setTimeout(() => { paginating.value = false }, 0)
+  }
 
   await nextTick()
   measureViewport()
@@ -696,6 +781,7 @@ async function renderChapter(charOffset = 0) {
     }
     totalPages.value = Math.max(1, Math.ceil(contentH / h))
     goPage(Math.min(charToPage(charOffset), totalPages.value - 1), false)
+    prefetchNextChapter(index)
     return
   }
 
@@ -710,6 +796,7 @@ async function renderChapter(charOffset = 0) {
   }
   totalPages.value = Math.max(1, Math.round((scrollW + pageBox.value.gap) / stride))
   goPage(Math.min(charToPage(charOffset), totalPages.value - 1), false)
+  prefetchNextChapter(index)
 }
 
 function goPage(page: number, animate = true) {
@@ -757,6 +844,50 @@ function jumpToChapter(index: number) {
   showCatalog.value = false
   activePanel.value = 'none'
   renderChapter(0)
+  saveProgress()
+}
+
+/* ---------- 书内搜索 ----------
+ * State machine lives in `useBookSearch`; the view only decides when to open,
+ * close and where the result jumps to.
+ */
+const {
+  query: searchQuery,
+  results: searchResults,
+  running: searchRunning,
+  searchable: searchableChapters,
+  reset: resetBookSearch,
+  dispose: disposeBookSearch,
+} = useBookSearch(chapterList, chapterHtml)
+
+function openBookSearch(): void {
+  clearSelection()
+  showSearch.value = true
+  activePanel.value = 'none'
+  showCatalog.value = false
+}
+
+function closeBookSearch(): void {
+  showSearch.value = false
+  resetBookSearch()
+}
+
+async function jumpToSearchHit(hit: BookSearchHit): Promise<void> {
+  const word = searchQuery.value.trim()
+  closeBookSearch()
+  showMenu.value = false
+  activePanel.value = 'none'
+  currentChapter.value = hit.chapterIndex
+  // Paint the match for a few seconds; the page itself is an approximation.
+  searchHit.value = {
+    chapterIndex: hit.chapterIndex,
+    start: hit.domOffset,
+    end: hit.domOffset + Math.max(1, word.length),
+  }
+  if (searchHitTimer) clearTimeout(searchHitTimer)
+  searchHitTimer = setTimeout(() => { searchHit.value = null }, 6000)
+  await nextTick()
+  await renderChapter(hit.charOffset)
   saveProgress()
 }
 
@@ -817,6 +948,73 @@ const {
   reason: listenReason,
   active: listenActive,
 } = listen
+
+/**
+ * 锁屏 / 蓝牙耳机控制（能力探测后的 best-effort）。
+ *
+ * Android WebView 不一定暴露 MediaSession，而朗读走的是原生 TTS 而不是
+ * <audio>，所以这里只负责把元数据和按钮动作接上；真正被系统保留多久由
+ * 系统决定，界面里的提示也对用户说清楚了。
+ */
+function syncMediaSession(): void {
+  const nav = navigator as Navigator & { mediaSession?: any }
+  const ms = nav.mediaSession
+  if (!ms) return
+  try {
+    if (!listenActive.value) {
+      ms.metadata = null
+      ms.playbackState = 'none'
+      return
+    }
+    const Meta = (window as unknown as { MediaMetadata?: any }).MediaMetadata
+    if (Meta) {
+      ms.metadata = new Meta({
+        title: listenChapterTitle.value || book.value?.title || '',
+        artist: book.value?.author || '',
+        album: book.value?.title || '',
+        artwork: book.value?.cover ? [{ src: book.value.cover, sizes: '512x512' }] : [],
+      })
+    }
+    ms.playbackState =
+      listenStatus.value === 'playing' ? 'playing'
+        : listenStatus.value === 'paused' ? 'paused'
+          : 'none'
+    const handlers: [string, () => void][] = [
+      ['play', () => { void listen.play() }],
+      ['pause', () => { void listen.pause() }],
+      ['previoustrack', () => listen.prev()],
+      ['nexttrack', () => listen.next()],
+    ]
+    for (const [name, fn] of handlers) {
+      try { ms.setActionHandler(name, fn) } catch { /* action unsupported */ }
+    }
+  } catch {
+    /* MediaSession is optional */
+  }
+}
+
+watch([listenActive, listenStatus, listenIndex, currentChapter], syncMediaSession)
+
+/** 把正在朗读的这句存成黄线「金句」，与手动画线共用一套存储。 */
+async function favoriteSentence(): Promise<void> {
+  const s = listenSentences.value[listenIndex.value]
+  if (!s || !s.text.trim()) return
+  const chapterIndex = currentChapter.value
+  const exists = highlights.value.some(h =>
+    h.chapterIndex === chapterIndex && h.start === s.start && h.end === s.end
+  )
+  if (exists) return
+  const row = await addHighlight({
+    bookId,
+    chapterIndex,
+    start: s.start,
+    end: s.end,
+    text: s.text,
+    note: '',
+    color: 'yellow',
+  })
+  highlights.value = [...highlights.value, row]
+}
 
 /** Segment the chapter body that is currently laid out. */
 function prepareListenText() {
@@ -1008,13 +1206,65 @@ let touchMoved = false
 /** Set when the touch began in the OS gesture zone and must be left alone. */
 let touchRejected = false
 
+/* ---- 跟手翻页 ----
+ * The page follows the finger while dragging, and the release decides by
+ * distance *or* speed (a short fast flick counts). Without this, page turns
+ * were a click that teleported the text — the single biggest gap against every
+ * mainstream reader.
+ */
+let dragging = false
+let dragDx = 0
+let dragStartedAt = 0
+
 const EDGE = EDGE_GESTURE_INSET
+
+function canGoNext(): boolean {
+  return currentPage.value < totalPages.value - 1 ||
+    currentChapter.value < chapterList.value.length - 1
+}
+
+function canGoPrev(): boolean {
+  return currentPage.value > 0 || currentChapter.value > 0
+}
+
+/** Move the text layer with the finger; edges get resistance instead of a wall. */
+function followDrag(dx: number) {
+  const el = contentEl.value
+  if (!el || isScrollMode.value) return
+  let limited = dx
+  if ((dx < 0 && !canGoNext()) || (dx > 0 && !canGoPrev())) limited = dx * 0.25
+  el.style.transition = 'none'
+  el.style.transform = `translateX(${-currentPage.value * columnStride.value + limited}px)`
+  dragDx = limited
+}
+
+/**
+ * Settle the drag. Returns true when a drag actually happened, so the trailing
+ * click is swallowed instead of turning the page a second time.
+ */
+function finishDrag(): boolean {
+  if (!dragging) return false
+  dragging = false
+  const dx = dragDx
+  dragDx = 0
+  const elapsed = Math.max(16, Date.now() - dragStartedAt)
+  const speed = Math.abs(dx) / elapsed
+  const threshold = Math.max(36, Math.min(120, window.innerWidth * 0.14))
+  const turned = Math.abs(dx) > threshold || speed > 0.45
+  if (turned && dx < 0 && canGoNext()) nextPage()
+  else if (turned && dx > 0 && canGoPrev()) prevPage()
+  else goPage(currentPage.value)
+  return true
+}
 
 function onTouchStart(e: TouchEvent) {
   const t = e.touches[0]
   touchStartX = t.clientX
   touchStartY = t.clientY
   touchMoved = false
+  dragging = false
+  dragDx = 0
+  dragStartedAt = Date.now()
   lastTouchAt = Date.now()
   selectionStartedThisTouch = false
   // Only reject edge-origin touches where the OS actually claims the edge.
@@ -1025,6 +1275,20 @@ function onTouchStart(e: TouchEvent) {
 function onTouchMove(e: TouchEvent) {
   const t = e.touches[0]
   if (!t) return
+  if (!touchRejected && !sel.value && !dragEnd && !isScrollMode.value) {
+    const dx = t.clientX - touchStartX
+    const dy = t.clientY - touchStartY
+    if (!dragging && Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) {
+      // A horizontal drag is a page turn, never a long-press selection.
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null }
+      dragging = true
+      touchMoved = true
+    }
+    if (dragging) {
+      followDrag(dx)
+      return
+    }
+  }
   onPressMove(t.clientX, t.clientY)
 }
 
@@ -1045,12 +1309,27 @@ function onTouchEnd(e: TouchEvent) {
     selectionStartedThisTouch = false
     suppressClickOnce()
   }
+  if (finishDrag()) {
+    suppressClickOnce()
+    return
+  }
   const dx = e.changedTouches[0].clientX - touchStartX
   const dy = e.changedTouches[0].clientY - touchStartY
   if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
     touchMoved = true
     if (dx < 0) nextPage()
     else prevPage()
+  }
+}
+
+/** A cancelled touch (incoming call, OS gesture) snaps the page back. */
+function onTouchCancel() {
+  touchRejected = false
+  onPressEnd()
+  if (dragging) {
+    dragging = false
+    dragDx = 0
+    goPage(currentPage.value)
   }
 }
 
@@ -1211,7 +1490,8 @@ const readingTimeText = computed(() => formatDuration(readingMs.value))
  */
 const autoPaging = ref(false)
 let autoTimer: ReturnType<typeof setInterval> | null = null
-const AUTO_PAGE_MS = 20000
+/** 自动翻页间隔可调；旧设置没有这个字段时按 20 秒。 */
+const autoPageMs = computed(() => Math.max(3, Math.round(settings.value.autoPageSeconds || 20)) * 1000)
 
 function toggleAutoPaging() {
   autoPaging.value = !autoPaging.value
@@ -1233,8 +1513,13 @@ function syncAutoTimer() {
     if (showMenu.value || showBookMenu.value || showCatalog.value) return
     if (activePanel.value !== 'none') return
     nextPage()
-  }, AUTO_PAGE_MS)
+  }, autoPageMs.value)
 }
+
+// 改速度时如果正在自动翻页，立刻按新间隔重排定时器。
+watch(autoPageMs, () => {
+  if (autoPaging.value) syncAutoTimer()
+})
 
 /**
  * Register whatever overlay is open with the global back handler, so an Android
@@ -1245,6 +1530,7 @@ const activeOverlayId = ref('')
 watch(
   () => {
     if (showBookMenu.value) return 'reader:book-menu'
+    if (showSearch.value) return 'reader:search'
     if (showCatalog.value) return 'reader:catalog'
     if (activePanel.value !== 'none') return `reader:panel:${activePanel.value}`
     if (showMenu.value) return 'reader:menu'
@@ -1256,6 +1542,7 @@ watch(
     if (!id) return
     openOverlay(id, () => {
       if (id === 'reader:book-menu') showBookMenu.value = false
+      else if (id === 'reader:search') closeBookSearch()
       else if (id === 'reader:catalog') showCatalog.value = false
       else if (id.startsWith('reader:panel:')) activePanel.value = 'none'
       else showMenu.value = false
@@ -1265,6 +1552,25 @@ watch(
 )
 
 /* ---------- lifecycle ---------- */
+/**
+ * The three reading switches are window-level behaviours, not page styling:
+ * keep-awake, orientation and volume keys all belong to the native Activity.
+ * Applied on entering the reader and restored on leaving, so they never leak
+ * into the rest of the app.
+ */
+function syncNativeReaderMode() {
+  applyReaderNativeMode({
+    keepAwake: settings.value.noAutoLock,
+    allowLandscape: settings.value.landscape,
+    volumeKeys: settings.value.volumeKeyTurn,
+  })
+}
+
+watch(
+  () => [settings.value.noAutoLock, settings.value.landscape, settings.value.volumeKeyTurn].join('|'),
+  syncNativeReaderMode,
+)
+
 onMounted(async () => {
   // The reader must be self-sufficient: a cold start (or a direct deep link)
   // has an empty book store, and relying on ShelfView to have populated it
@@ -1331,6 +1637,14 @@ onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('visibilitychange', onVisibility)
 
+  // Native volume keys arrive here; the shell only forwards them while the
+  // setting is on, so no extra guard is needed.
+  window.__readerVolumeTurn = (dir) => {
+    if (dir === 'prev') prevPage()
+    else nextPage()
+  }
+  syncNativeReaderMode()
+
   readingMs.value = await getReadingTime(bookId)
   startSession()
 })
@@ -1367,6 +1681,10 @@ onBeforeUnmount(() => {
   // The speech engine keeps talking after the view is gone unless told to stop.
   void listen.stop()
   clearListenTimer()
+  delete window.__readerVolumeTurn
+  resetReaderNativeMode()
+  disposeBookSearch()
+  if (searchHitTimer) clearTimeout(searchHitTimer)
   if (activeOverlayId.value) closeOverlay(activeOverlayId.value)
   if (autoTimer) clearInterval(autoTimer)
   clearInterval(sessionTimer)
@@ -1417,6 +1735,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       @touchstart.passive="onTouchStart"
       @touchmove.passive="onTouchMove"
       @touchend.passive="onTouchEnd"
+      @touchcancel.passive="onTouchCancel"
       @mousedown="onMouseDown"
       @mousemove="onMouseMove"
       @mouseup="onMouseUp"
@@ -1453,6 +1772,19 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
             }"
         v-html="renderedHtml"
       />
+    </div>
+
+    <!-- 阅读亮度：黑色薄幕，只压正文与页面底色，不挡菜单/弹窗（z-index 低于 chrome）。 -->
+    <div
+      v-if="dimOpacity > 0"
+      class="reader__dim"
+      :style="{ opacity: dimOpacity }"
+      aria-hidden="true"
+    />
+
+    <div v-if="paginating" class="reader__fetch">
+      <LoadingDots />
+      <span>正在排版本章…</span>
     </div>
 
     <!-- 在线章节按需抓取的状态：只覆盖一小块，不遮挡已排版的内容。 -->
@@ -1507,6 +1839,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
         :note-count="ideaCount"
         @back="router.back()"
         @notes="activePanel = 'notes'"
+        @search="openBookSearch"
         @share="shareExcerpt"
         @more="showBookMenu = true"
       />
@@ -1581,6 +1914,18 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       @bookmark="toggleBookmark(); showCatalog = false"
     />
 
+    <BookSearchPanel
+      v-if="showSearch"
+      :query="searchQuery"
+      :results="searchResults"
+      :searching="searchRunning"
+      :cached="searchableChapters.length"
+      :total="chapterList.length"
+      @update:query="searchQuery = $event"
+      @jump="jumpToSearchHit"
+      @close="closeBookSearch"
+    />
+
     <!--
       Live selection: painted from the range's client rects rather than a DOM
       selection, so the platform never draws its own bar or handles over it.
@@ -1630,6 +1975,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       @auto-next="toggleListenAutoNext"
       @timer="setListenTimer"
       @catalog="openListenCatalog"
+      @favorite="favoriteSentence"
       @collapse="collapseListening"
       @close="closeListening"
     />
@@ -1653,8 +1999,8 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       @share="shareSelection"
       @select-all="selectWholeBody"
       @web-search="webSearchSelection"
-      @highlight="saveHighlight('')"
-      @note="(t: string) => saveHighlight(t)"
+      @highlight="onHighlight"
+      @note="onNote"
       @close="clearSelection"
     />
   </div>
@@ -1686,6 +2032,16 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+/* Brightness veil: above the text, below every piece of chrome. */
+.reader__dim {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  background: #000;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) linear;
 }
 
 /* Live selection paint + drag handles (viewport-space, so `position: fixed`). */
@@ -1839,6 +2195,10 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   color: inherit;
   border-radius: 2px;
 }
+/* 四色划线；blue 走上面的默认规则，其余各有自己的底色。 */
+.reader__pages :deep(mark.reader__hl--yellow) { background: rgba(255, 193, 7, 0.38); }
+.reader__pages :deep(mark.reader__hl--green) { background: rgba(52, 199, 89, 0.3); }
+.reader__pages :deep(mark.reader__hl--pink) { background: rgba(255, 45, 85, 0.22); }
 .reader__pages :deep(img) {
   max-width: 100%;
   /* A tall illustration taller than the page box can never fit a column and

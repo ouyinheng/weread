@@ -1,4 +1,4 @@
-import { dbGet, dbPut } from '@/utils/db'
+import { dbGet, dbGetAll, dbPut } from '@/utils/db'
 
 export interface ReadingSession {
   bookId: string
@@ -6,7 +6,19 @@ export interface ReadingSession {
   lastAt: number
 }
 
-/** Accumulate foreground reading duration for a book. */
+/** One calendar day of reading, used by the 30-day chart. */
+export interface DailyReading {
+  /** `YYYY-MM-DD`, local time. */
+  id: string
+  ms: number
+}
+
+function dayKey(d: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/** Accumulate foreground reading duration for a book (and for the day). */
 export async function addReadingTime(bookId: string, deltaMs: number): Promise<number> {
   if (!isFinite(deltaMs) || deltaMs <= 0) return 0
   // Ignore absurd deltas (app suspended for hours, device sleep, clocks).
@@ -15,6 +27,12 @@ export async function addReadingTime(bookId: string, deltaMs: number): Promise<n
   const cur = await dbGet<ReadingSession>('sessions', bookId)
   const totalMs = (cur?.totalMs || 0) + delta
   await dbPut('sessions', { bookId, totalMs, lastAt: Date.now() })
+
+  // The daily bucket is what the 30-day chart reads; keep it in the same call
+  // so the two can never disagree about how long the session was.
+  const key = dayKey()
+  const day = await dbGet<DailyReading>('daily', key)
+  await dbPut('daily', { id: key, ms: (day?.ms || 0) + delta })
   return totalMs
 }
 
@@ -24,9 +42,36 @@ export async function getReadingTime(bookId: string): Promise<number> {
 }
 
 export async function getAllReadingTime(): Promise<number> {
-  const { dbGetAll } = await import('@/utils/db')
   const all = await dbGetAll<ReadingSession>('sessions')
   return all.reduce((sum, s) => sum + (s.totalMs || 0), 0)
+}
+
+/**
+ * The last `days` calendar days, including zero days, ready for a bar chart.
+ * Local dates on purpose: a reader's "yesterday" is their device's yesterday.
+ */
+export async function getDailyReading(days = 30): Promise<{ date: string; ms: number }[]> {
+  const all = await dbGetAll<DailyReading>('daily')
+  const byDay = new Map(all.map(d => [d.id, d.ms || 0]))
+  const out: { date: string; ms: number }[] = []
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    d.setDate(d.getDate() - i)
+    const key = dayKey(d)
+    out.push({ date: key, ms: byDay.get(key) || 0 })
+  }
+  return out
+}
+
+/** Consecutive days with reading, counting back from today. */
+export function readingStreak(list: { date: string; ms: number }[]): number {
+  let streak = 0
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].ms > 0) streak++
+    else break
+  }
+  return streak
 }
 
 /** Format like WeRead: "35 小时 6 分钟" */

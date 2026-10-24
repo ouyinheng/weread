@@ -1,5 +1,5 @@
 import type { Book } from '@/types'
-import { dbGet, dbPut, dbPutMany, dbDeleteByIndex, openRawDB } from '@/utils/db'
+import { dbGet, dbPut, dbPutMany, dbPutRaw, dbDeleteByIndex } from '@/utils/db'
 import { parseTxt, parseEpub, PARSER_VERSION, type ParsedBook } from '@/utils/parser'
 
 export interface StoredFile {
@@ -10,19 +10,9 @@ export interface StoredFile {
 
 /** Keep the original file so a parser upgrade can rebuild the book later. */
 export async function saveSourceFile(bookId: string, name: string, bytes: ArrayBuffer): Promise<void> {
+  // Structured clone handles ArrayBuffer natively; the Proxy-stripping helper in
+  // db.ts round-trips through JSON and would destroy the bytes.
   await dbPutRaw('files', { bookId, name, bytes })
-}
-
-// Structured clone handles ArrayBuffer natively; the Proxy-stripping helper in
-// db.ts round-trips through JSON and would destroy the bytes.
-async function dbPutRaw(store: string, value: any): Promise<void> {
-  const db = await openRawDB()
-  return new Promise((resolve, reject) => {
-    const t = db.transaction(store, 'readwrite')
-    const r = t.objectStore(store).put(value)
-    r.onsuccess = () => resolve()
-    r.onerror = () => reject(r.error)
-  })
 }
 
 export async function loadSourceFile(bookId: string): Promise<StoredFile | undefined> {

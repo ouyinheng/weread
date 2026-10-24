@@ -11,11 +11,12 @@
  * honest empty state rather than pretending to have community highlights.
  */
 import { computed, ref } from 'vue'
-import type { Book, Bookmark, Chapter, Highlight } from '@/types'
+import type { Book, Bookmark, Chapter, Highlight, HighlightColor } from '@/types'
 import Icon from '@/components/Icon.vue'
 import BookCover from '@/components/BookCover.vue'
 import type { IconName } from '@/components/icon-names'
 import { alertDialog } from '@/utils/dialog'
+import { saveFile } from '@/utils/save-file'
 
 const props = defineProps<{
   bookmarks: Bookmark[]
@@ -67,6 +68,7 @@ interface NoteRow {
   charOffset: number
   text: string
   note: string
+  color?: HighlightColor
   createdAt: number
 }
 
@@ -88,6 +90,7 @@ const rows = computed<NoteRow[]>(() => {
       charOffset: h.start,
       text: h.text,
       note: h.note,
+      color: h.color,
       createdAt: h.createdAt,
     })),
   ].sort((a, b) => b.createdAt - a.createdAt)
@@ -106,12 +109,18 @@ const rows = computed<NoteRow[]>(() => {
 const actions = computed<{ icon: IconName; label: string; run: () => void }[]>(() => [
   { icon: 'bookmark', label: props.isBookmarked ? '取消书签' : '添加书签', run: () => emit('toggle') },
   { icon: 'search', label: '搜索笔记', run: () => { searchOpen.value = !searchOpen.value } },
-  { icon: 'share', label: '导出笔记', run: exportNotes },
+  { icon: 'share', label: '导出笔记', run: () => { void exportNotes() } },
   { icon: 'progress', label: '阅读统计', run: () => emit('stats') },
 ])
 
-/** Export this book's notes as a plain-text file (the only honest "export"). */
-function exportNotes() {
+/**
+ * Export this book's notes as Markdown.
+ *
+ * Markdown (rather than plain text) keeps the chapter structure, quote blocks
+ * and 想法, so the file drops straight into Obsidian / Notion instead of being
+ * something the user has to reformat by hand.
+ */
+async function exportNotes() {
   if (!rows.value.length) {
     void alertDialog({
       title: '导出笔记',
@@ -120,24 +129,65 @@ function exportNotes() {
     })
     return
   }
-  const lines = rows.value.map((r, i) => {
-    const when = new Date(r.createdAt).toLocaleString()
-    const kind = r.kind === 'highlight' ? (r.note ? '想法' : '划线') : '书签'
-    const note = r.note ? `\n   想法：${r.note}` : ''
-    return `${i + 1}. [${kind}] ${chapterTitle(r.chapterIndex)} · ${when}\n   ${r.text}${note}`
-  })
-  const text = `${props.bookTitle || '笔记'} · ${rows.value.length} 条\n\n${lines.join('\n\n')}\n`
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${(props.bookTitle || 'notes').replace(/[\\/:*?"<>|]/g, '_')}-笔记.txt`
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+  const groups = new Map<number, NoteRow[]>()
+  for (const row of rows.value) {
+    const list = groups.get(row.chapterIndex)
+    if (list) list.push(row)
+    else groups.set(row.chapterIndex, [row])
+  }
+
+  const title = props.bookTitle || '未命名书籍'
+  const lines: string[] = [
+    `# 《${title}》笔记`,
+    '',
+    `> 共 ${rows.value.length} 条 · 导出于 ${new Date().toLocaleString()}`,
+    '',
+  ]
+  for (const [chapterIndex, list] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
+    lines.push(`## ${chapterTitle(chapterIndex)}`, '')
+    for (const row of list.sort((a, b) => a.charOffset - b.charOffset)) {
+      if (row.kind === 'highlight') {
+        lines.push(`> ${row.text.replace(/\r?\n/g, '\n> ')}`, '')
+        if (row.note.trim()) lines.push(`**想法：** ${row.note.trim()}`, '')
+      } else {
+        lines.push(`- 书签：${row.text.replace(/\r?\n/g, ' ').trim()}`, '')
+      }
+    }
+  }
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+  const filename = `${title.replace(/[\\/:*?"<>|]/g, '_')}-笔记.md`
+  try {
+    const result = await saveFile(blob, filename, 'text/markdown')
+    if (result.mode === 'saved') {
+      void alertDialog({
+        title: '已导出笔记',
+        message: `Markdown 已保存到：${result.path || '下载目录'}`,
+        confirmText: '知道了',
+      })
+    }
+  } catch (e) {
+    void alertDialog({
+      title: '导出失败',
+      message: (e as Error)?.message || '文件无法写入',
+      confirmText: '知道了',
+    })
+  }
 }
 
 function chapterTitle(index: number): string {
   return props.chapters[index]?.title || `第${index + 1}章`
+}
+
+/** 划线的底色，列表里用同色小圆点标记。 */
+function colorCss(color?: HighlightColor): string {
+  switch (color) {
+    case 'yellow': return 'rgba(255, 193, 7, 0.75)'
+    case 'green': return 'rgba(52, 199, 89, 0.6)'
+    case 'pink': return 'rgba(255, 45, 85, 0.55)'
+    default: return 'rgba(27, 136, 238, 0.6)'
+  }
 }
 
 function formatDate(ts: number): string {
@@ -212,6 +262,11 @@ function formatDate(ts: number): string {
           <div v-for="row in rows" :key="row.id" class="notes__row">
             <button class="notes__row-main" @click="emit('jump', row.chapterIndex, row.charOffset)">
               <span class="notes__row-chapter">
+                <i
+                  v-if="row.kind === 'highlight'"
+                  class="notes__row-dot"
+                  :style="{ background: colorCss(row.color) }"
+                />
                 <i v-if="row.kind === 'highlight'" class="notes__row-kind">{{ row.note ? '想法' : '划线' }}</i>
                 {{ chapterTitle(row.chapterIndex) }}
               </span>
@@ -474,6 +529,16 @@ function formatDate(ts: number): string {
   line-height: 1.5;
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* 划线颜色圆点，与正文里的 mark 同色。 */
+.notes__row-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: 1px;
 }
 .notes__row-note {
   font-size: calc(12px * var(--app-font-scale));

@@ -26,15 +26,24 @@ const s = computed(() => store.settings)
 defineProps<{ autoPaging: boolean }>()
 const emit = defineEmits<{ auto: [] }>()
 
+/**
+ * Only the two modes the reader actually implements are offered.
+ *
+ * 仿真翻页 / 覆盖翻页 used to be listed here and both fell through to the
+ * horizontal slide, so picking them changed nothing — an ineffective switch is
+ * worse for trust than a missing feature. They return when a real page-curl
+ * layer exists.
+ */
 const turnTypes: { id: TurnPageType; label: string }[] = [
-  { id: 'simulation', label: '仿真翻页' },
   { id: 'horizontal', label: '左右滑动' },
   { id: 'vertical', label: '上下滚动' },
-  { id: 'cover', label: '覆盖翻页' },
 ]
 
 type View = 'main' | 'fonts' | 'indent' | 'turn'
 const view = ref<View>('main')
+
+/** 自动翻页间隔候选（秒）。 */
+const AUTO_SPEEDS = [10, 20, 30, 60]
 
 /** Line height travels the slider in 0.05 steps. */
 const lineHeightUnits = computed(() => Math.round((s.value.lineHeight - 1.2) * 20))
@@ -223,6 +232,17 @@ const shownFonts = computed(() =>
           :class="{ 'fp-turn-row--on': s.turnPageType === t.id }"
           @click="store.update({ turnPageType: t.id })"
         >{{ t.label }}</button>
+      </div>
+
+      <div class="fp-turn-speed">
+        <span class="fp-turn-speed__label">自动翻页间隔</span>
+        <button
+          v-for="sec in AUTO_SPEEDS"
+          :key="sec"
+          class="fp-turn-speed__btn"
+          :class="{ 'fp-turn-speed__btn--on': s.autoPageSeconds === sec }"
+          @click="store.update({ autoPageSeconds: sec })"
+        >{{ sec }} 秒</button>
       </div>
     </div>
   </div>
@@ -469,6 +489,30 @@ const shownFonts = computed(() =>
 }
 .fp-turn-row--on {
   border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fp-turn-speed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+.fp-turn-speed__label {
+  width: 100%;
+  font-size: calc(12px * var(--app-font-scale));
+  color: var(--text-secondary);
+}
+.fp-turn-speed__btn {
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: var(--bg-secondary);
+  font-size: calc(13px * var(--app-font-scale));
+  color: var(--text);
+}
+.fp-turn-speed__btn--on {
   background: var(--accent-soft);
   color: var(--accent);
 }

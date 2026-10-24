@@ -44,6 +44,8 @@ const emit = defineEmits<{
   autoNext: []
   timer: [number]
   catalog: []
+  /** 收藏当前句为「金句」。 */
+  favorite: []
   collapse: []
   close: []
 }>()
@@ -185,9 +187,9 @@ watch(sheet, (v) => {
         <span class="lv__action-icon"><Icon name="speed" :size="22" /></span>
         <span class="lv__action-text">{{ rateText }}</span>
       </button>
-      <button class="lv__action" @click="emit('catalog')">
-        <span class="lv__action-icon"><Icon name="catalog" :size="22" /></span>
-        <span class="lv__action-text">目录</span>
+      <button class="lv__action" @click="emit('favorite')">
+        <span class="lv__action-icon"><Icon name="bookmark" :size="22" /></span>
+        <span class="lv__action-text">金句</span>
       </button>
       <button class="lv__action" @click="openSheet('voice')">
         <span class="lv__action-icon"><Icon name="headphones" :size="22" /></span>
@@ -387,6 +389,9 @@ watch(sheet, (v) => {
               <span class="toggle" :class="{ on: autoNext }"><span class="toggle__dot" /></span>
             </button>
           </div>
+          <p class="lv-sheet__hint">
+            锁屏或切到后台时，部分系统会暂停朗读；回到应用后会自动继续。本机不启用后台媒体服务。
+          </p>
           <button class="lv-sheet__danger" @click="emit('close')">退出听书</button>
         </template>
       </div>

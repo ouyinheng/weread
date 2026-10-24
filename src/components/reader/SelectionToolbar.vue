@@ -11,6 +11,7 @@
  * block and none can style.
  */
 import { nextTick, ref } from 'vue'
+import type { HighlightColor } from '@/types'
 
 defineProps<{
   /** Selection midpoint in viewport px; the bar is centred on it. */
@@ -26,11 +27,21 @@ const emit = defineEmits<{
   share: []
   selectAll: []
   webSearch: []
-  highlight: []
-  /** Save a highlight carrying this note. */
-  note: [string]
+  /** Save a plain 划线 in the chosen colour. */
+  highlight: [HighlightColor]
+  /** Save a highlight carrying this note, in the chosen colour. */
+  note: [string, HighlightColor]
   close: []
 }>()
+
+/** WeRead's four highlighter colours; blue is the default. */
+const COLORS: { id: HighlightColor; css: string }[] = [
+  { id: 'blue', css: 'rgba(27, 136, 238, 0.55)' },
+  { id: 'yellow', css: 'rgba(255, 193, 7, 0.7)' },
+  { id: 'green', css: 'rgba(52, 199, 89, 0.55)' },
+  { id: 'pink', css: 'rgba(255, 45, 85, 0.5)' },
+]
+const color = ref<HighlightColor>('blue')
 
 const noteOpen = ref(false)
 const noteText = ref('')
@@ -48,19 +59,31 @@ function saveNote() {
     emit('close')
     return
   }
-  emit('note', t)
+  emit('note', t, color.value)
 }
 </script>
 
 <template>
   <div class="sel-bar" :style="{ left: x + 'px', top: y + 'px' }" @click.stop>
+    <div class="sel-row sel-row--colors">
+      <span class="sel-colors-label">划线颜色</span>
+      <button
+        v-for="c in COLORS"
+        :key="c.id"
+        class="sel-color"
+        :class="{ 'sel-color--on': color === c.id }"
+        :style="{ background: c.css }"
+        :aria-label="`${c.id} 划线`"
+        @click="color = c.id"
+      />
+    </div>
     <div class="sel-row">
       <button class="sel-item" @click="emit('copy')">复制</button>
       <button class="sel-item" @click="emit('share')">分享</button>
       <button class="sel-item" :disabled="allSelected" @click="emit('selectAll')">全选</button>
     </div>
     <div class="sel-row">
-      <button class="sel-item sel-item--primary" @click="emit('highlight')">划线</button>
+      <button class="sel-item sel-item--primary" @click="emit('highlight', color)">划线</button>
       <button class="sel-item sel-item--primary" @click="openNote">想法</button>
       <button class="sel-item" @click="emit('webSearch')">网页搜索</button>
     </div>
@@ -106,6 +129,30 @@ function saveNote() {
 }
 .sel-row + .sel-row {
   border-top: 0.5px solid rgba(0, 0, 0, 0.08);
+}
+
+.sel-row--colors {
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+}
+
+.sel-colors-label {
+  font-size: calc(12px * var(--app-font-scale));
+  color: rgba(0, 0, 0, 0.45);
+  margin-right: 2px;
+}
+
+.sel-color {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 0 transparent;
+  transition: box-shadow 120ms ease-out;
+}
+
+.sel-color--on {
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px rgba(0, 0, 0, 0.35);
 }
 
 .sel-item {

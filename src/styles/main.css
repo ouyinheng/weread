@@ -74,6 +74,11 @@
      full opacity in ~40% of the duration, which looked like a hard cut. */
   --page-duration: 220ms;
   --page-easing: cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* Shared motion scale: new components use these instead of hand-written
+     milliseconds, so a change to pacing is one edit. */
+  --dur-fast: 180ms;
+  --dur-page: 220ms;
+  --ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   /* App-level typography, written by useAppSettingsStore. Chrome scales, the
      reader's body text does not: body size is the reader's own control. */

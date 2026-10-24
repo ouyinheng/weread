@@ -199,11 +199,73 @@ function finalizeChapters(list: ChapterRaw[]): ChapterRaw[] {
   }))
 }
 
+/**
+ * Very long chapters are the one case where CSS multicol can block the main
+ * thread for a noticeable time. Splitting them at import keeps every chapter at
+ * a size the reader can lay out in one frame; the title marks the parts so the
+ * catalogue still reads sensibly.
+ *
+ * Only applied to new parses: changing the chapter list of an existing book
+ * would shift every saved character offset.
+ */
+const LONG_CHAPTER_LIMIT = 40000
+
+export function splitLongChapters(chapters: ChapterRaw[], limit = LONG_CHAPTER_LIMIT): ChapterRaw[] {
+  const out: ChapterRaw[] = []
+  for (const chapter of chapters) {
+    if ((chapter.text || '').length <= limit) {
+      out.push(chapter)
+      continue
+    }
+
+    // Block-level splits keep the markup balanced; cutting mid-tag would leak
+    // broken HTML into v-html.
+    const blocks = chapter.html
+      .split(/(?<=<\/p>|<\/div>|<\/h[1-6]>|<br\s*\/?>)/i)
+      .filter(b => b.trim())
+    if (blocks.length <= 1) {
+      // One giant block: leave it whole rather than risk a broken tag.
+      out.push(chapter)
+      continue
+    }
+
+    const parts: string[] = []
+    let buffer = ''
+    let size = 0
+    for (const block of blocks) {
+      const len = block.replace(/<[^>]+>/g, '').replace(/\s+/g, '').length
+      if (buffer && size + len > limit) {
+        parts.push(buffer)
+        buffer = ''
+        size = 0
+      }
+      buffer += block
+      size += len
+    }
+    if (buffer) parts.push(buffer)
+    if (parts.length <= 1) {
+      out.push(chapter)
+      continue
+    }
+
+    parts.forEach((html, i) => {
+      const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+      const suffix = `（${i + 1}/${parts.length}）`
+      out.push({
+        title: chapter.title ? `${chapter.title}${suffix}` : suffix,
+        html,
+        text,
+      })
+    })
+  }
+  return out
+}
+
 export async function parseTxt(buffer: ArrayBuffer, filename: string): Promise<ParsedBook> {
   const encoding = detectEncoding(buffer)
   const text = decodeWithFallback(buffer, encoding)
   const { title, author } = parseTitleFromFilename(filename)
-  const chapters = segmentTxt(text)
+  const chapters = splitLongChapters(segmentTxt(text))
   const totalWords = text.replace(/\s/g, '').length
   return { title, author, cover: null, chapters, totalWords }
 }
@@ -287,13 +349,18 @@ export async function parseEpub(buffer: ArrayBuffer, filename: string): Promise<
     break
   }
 
-  // 4. Parse NCX for chapter titles
+  // 4. Table of contents. EPUB3 ships a nav document; NCX is the EPUB2
+  // fallback. Many new books carry only the former, so it must be read first —
+  // otherwise every chapter is titled "Chapter N".
+  const navTitles = await parseNavTitles(zip, opfPath, opfXml)
   const ncxTitles: string[] = []
-  const ncxFile = zip.file(/\.ncx$/)
-  if (ncxFile.length > 0) {
-    const ncxXml = await ncxFile[0].async('string')
-    const labelRe = /<text>([^<]+)<\/text>/g
-    while ((m = labelRe.exec(ncxXml))) ncxTitles.push(m[1].trim())
+  if (!navTitles.size) {
+    const ncxFile = zip.file(/\.ncx$/)
+    if (ncxFile.length > 0) {
+      const ncxXml = await ncxFile[0].async('string')
+      const labelRe = /<text>([^<]+)<\/text>/g
+      while ((m = labelRe.exec(ncxXml))) ncxTitles.push(m[1].trim())
+    }
   }
 
   // 5. Parse chapters
@@ -357,7 +424,7 @@ export async function parseEpub(buffer: ArrayBuffer, filename: string): Promise<
     // Cover/colophon pages carry no prose; an empty chapter renders as a
     // blank page, so skip it rather than making the reader look broken.
     if (!text) continue
-    const title = ncxTitles[ncxTitles.length > chapters.length ? chapters.length : i] || `Chapter ${chapters.length + 1}`
+    const title = navTitles.get(path) || ncxTitles[ncxTitles.length > chapters.length ? chapters.length : i] || `Chapter ${chapters.length + 1}`
     chapters.push({ title, html, text })
   }
 
@@ -365,15 +432,79 @@ export async function parseEpub(buffer: ArrayBuffer, filename: string): Promise<
     title: titleM ? titleM[1].trim() : title,
     author: authorM ? authorM[1].trim() : author,
     cover,
-    chapters,
+    chapters: splitLongChapters(chapters),
     totalWords
   }
 }
 
 function resolvePath(base: string, relative: string): string {
-  const dir = base.substring(0, base.lastIndexOf('/'))
   if (relative.startsWith('/')) return relative.substring(1)
-  return dir ? `${dir}/${relative}` : relative
+  const dir = base.substring(0, base.lastIndexOf('/'))
+  const joined = dir ? `${dir}/${relative}` : relative
+  // Collapse `.` / `..` so a nav entry and its spine item normalise to the same
+  // key: EPUB nav documents commonly link with `../Text/ch1.xhtml`.
+  const parts: string[] = []
+  for (const part of joined.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return parts.join('/')
+}
+
+/**
+ * Chapter titles from an EPUB3 navigation document, keyed by the resolved path
+ * of the file each entry points at.
+ *
+ * Only the `toc` nav is read (EPUB also permits `landmarks` and `page-list`).
+ * Anchors that point inside a file (`ch1.xhtml#part2`) collapse onto the same
+ * chapter; the first label wins, which is the chapter title rather than a
+ * sub-heading.
+ */
+async function parseNavTitles(
+  zip: JSZip,
+  opfPath: string,
+  opfXml: string,
+): Promise<Map<string, string>> {
+  const titles = new Map<string, string>()
+  const navHref = findNavHref(opfXml)
+  if (!navHref) return titles
+
+  const navPath = resolvePath(opfPath, navHref)
+  const navFile = zip.file(navPath) || zip.file(decodeURIComponent(navPath))
+  if (!navFile) return titles
+
+  const navXml = await navFile.async('string')
+  const tocBlock =
+    /<nav\b[^>]*(?:epub:type|role)\s*=\s*["'][^"']*toc[^"']*["'][^>]*>([\s\S]*?)<\/nav>/i.exec(navXml)
+  const body = tocBlock ? tocBlock[1] : navXml
+
+  const anchorRe = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+  let a: RegExpExecArray | null
+  while ((a = anchorRe.exec(body))) {
+    const href = a[1].trim()
+    if (!href || href.startsWith('#') || /^(https?:|mailto:)/i.test(href)) continue
+    const target = resolvePath(navPath, href.split('#')[0])
+    if (titles.has(target)) continue
+    const label = decodeEntities(a[2].replace(/<[^>]+>/g, ''))
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (label) titles.set(target, label)
+  }
+  return titles
+}
+
+/** The manifest item declared `properties="nav"`. */
+function findNavHref(opfXml: string): string | null {
+  const itemRe = /<item\s[^>]*\/?>/gi
+  let m: RegExpExecArray | null
+  while ((m = itemRe.exec(opfXml))) {
+    const tag = m[0]
+    if (!/properties\s*=\s*["'][^"']*\bnav\b[^"']*["']/i.test(tag)) continue
+    const href = /href\s*=\s*["']([^"']+)["']/i.exec(tag)
+    if (href) return href[1]
+  }
+  return null
 }
 
 /**

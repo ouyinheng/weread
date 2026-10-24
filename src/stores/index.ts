@@ -38,7 +38,11 @@ export const useBookStore = defineStore('book', () => {
     await dbDelete('books', id)
     await dbDeleteByIndex('chapters', 'bookId', id)
     await dbDeleteByIndex('bookmarks', 'bookId', id)
+    // 划线/想法与原始字节没有级联关系：不在这里删，它们会永远留在库里，
+    // 既占配额，也会让「笔记」统计出现无主记录。
+    await dbDeleteByIndex('highlights', 'bookId', id)
     await dbDelete('sessions', id)
+    await dbDelete('files', id)
     books.value = books.value.filter(b => b.id !== id)
   }
 
@@ -58,6 +62,7 @@ export const useSettingsStore = defineStore('settings', () => {
     background: 'plain',
     fontFamily: 'system',
     turnPageType: 'horizontal',
+    autoPageSeconds: 20,
     firstLineIndent: true,
     // WeRead defaults this off: paragraphs separate by the 2em indent alone.
     paragraphSpacing: false,
@@ -74,7 +79,14 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function loadSettings() {
     const saved = await dbGet<ReaderSettings>('settings', 'reader')
-    if (saved) Object.assign(settings.value, saved)
+    if (saved) {
+      Object.assign(settings.value, saved)
+      // 旧版本存过未实现的两种翻页方式；它们从来没有对应动画，读回时归一到
+      // 真正可用的左右滑动，避免设置页显示一个不存在的选项。
+      if (settings.value.turnPageType === 'simulation' || settings.value.turnPageType === 'cover') {
+        settings.value.turnPageType = 'horizontal'
+      }
+    }
   }
 
   async function update(patch: Partial<ReaderSettings>) {

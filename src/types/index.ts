@@ -16,6 +16,8 @@ export interface Book {
   parserVersion?: number
   /** Original filename, needed to re-parse from the stored source bytes. */
   sourceName?: string
+  /** SHA-256 of the imported bytes, so the same file cannot land twice. */
+  fingerprint?: string
 
   /* ---------- 在线书（sourceId 存在即在线书，format 仍是 txt） ---------- */
   /** 来源书源 id；本地导入的书为 undefined */
@@ -47,6 +49,8 @@ export interface ReaderSettings {
   background: BackgroundId
   fontFamily: string
   turnPageType: TurnPageType
+  /** 自动翻页间隔（秒）。 */
+  autoPageSeconds: number
   firstLineIndent: boolean
   /**
    * Extra space between paragraphs. WeRead offers this as a switch under
@@ -89,6 +93,8 @@ export type AppTheme = 'system' | 'light' | 'dark'
 export type ThemeId = 'white' | 'yellow' | 'green' | 'black'
 export type BackgroundId = 'plain' | 'paper' | 'grid' | 'desert' | 'sky'
 export type TurnPageType = 'horizontal' | 'vertical' | 'simulation' | 'cover'
+/** 划线颜色；老记录没有 color，按 blue 处理。 */
+export type HighlightColor = 'blue' | 'yellow' | 'green' | 'pink'
 
 export interface Bookmark {
   id: string
@@ -115,6 +121,8 @@ export interface Highlight {
   text: string
   /** User's thought on the passage; empty for a plain 划线. */
   note: string
+  /** 划线颜色；缺省为 blue（老数据）。 */
+  color?: HighlightColor
   createdAt: number
 }
 

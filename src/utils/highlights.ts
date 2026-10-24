@@ -6,7 +6,7 @@
  * survive a font-size change and a re-layout: the reader re-renders the HTML
  * and re-wraps the ranges every time, rather than keeping DOM references.
  */
-import type { Highlight } from '@/types'
+import type { Highlight, HighlightColor } from '@/types'
 import { dbDelete, dbDeleteByIndex, dbGetAll, dbPut } from '@/utils/db'
 
 export async function loadHighlights(bookId: string): Promise<Highlight[]> {
@@ -42,7 +42,7 @@ export async function purgeBookHighlights(bookId: string): Promise<void> {
  * the text nodes as we go keeps the offsets valid because each range is applied
  * against the freshly re-parsed markup.
  */
-export function applyHighlights(html: string, ranges: { start: number; end: number }[]): string {
+export function applyHighlights(html: string, ranges: { start: number; end: number; color?: HighlightColor }[]): string {
   if (!html || !ranges.length) return html
 
   const doc = new DOMParser().parseFromString(`<div id="wr-root">${html}</div>`, 'text/html')
@@ -51,12 +51,12 @@ export function applyHighlights(html: string, ranges: { start: number; end: numb
 
   for (const r of ranges) {
     if (!(r.end > r.start)) continue
-    wrapRange(root, r.start, r.end)
+    wrapRange(root, r.start, r.end, r.color)
   }
   return root.innerHTML
 }
 
-function wrapRange(root: HTMLElement, start: number, end: number): void {
+function wrapRange(root: HTMLElement, start: number, end: number, color?: HighlightColor): void {
   // Snapshot the text nodes first: inserting <mark> mid-walk would make the
   // walker visit the wrapped text a second time and corrupt the offsets.
   const nodes: Text[] = []
@@ -73,7 +73,7 @@ function wrapRange(root: HTMLElement, start: number, end: number): void {
       const cut = text.splitText(from - pos)
       cut.splitText(to - from)
       const mark = root.ownerDocument!.createElement('mark')
-      mark.className = 'reader__hl'
+      mark.className = color && color !== 'blue' ? `reader__hl reader__hl--${color}` : 'reader__hl'
       cut.parentNode!.insertBefore(mark, cut)
       mark.appendChild(cut)
     }

@@ -25,6 +25,12 @@ export interface HttpOptions {
   headers?: Record<string, string>
   referer?: string
   timeout?: number
+  /** legado's rule URL options; defaults to GET. */
+  method?: 'GET' | 'POST'
+  /** Request body for POST (form-encoded). */
+  body?: string
+  /** Decode the response with this charset instead of sniffing it. */
+  charset?: string
 }
 
 export interface HttpResult {
@@ -146,7 +152,11 @@ function headerOf(headers: Record<string, string> | undefined, name: string): st
   return key ? String(headers[key] ?? '') : ''
 }
 
-function decodeBody(data: unknown, headers: Record<string, string> | undefined): string {
+function decodeBody(
+  data: unknown,
+  headers: Record<string, string> | undefined,
+  charset?: string,
+): string {
   /*
    * CapacitorHttp 遇到 `Content-Type: application/json` 会无视 responseType，
    * 直接把响应解析成对象。书源合集正好是 JSON，这里必须序列化回文本，
@@ -159,6 +169,11 @@ function decodeBody(data: unknown, headers: Record<string, string> | undefined):
   // 原生端已解成字符串（非 arraybuffer 路径）：直接用。
   if (!bytes) return typeof data === 'string' ? data : String(data ?? '')
 
+  // 规则里声明的 charset 优先：不少源站的响应头写 utf-8，正文其实是 GBK。
+  if (charset) {
+    try { return new TextDecoder(charset).decode(bytes) } catch { /* 落到探测 */ }
+  }
+
   const ct = headerOf(headers, 'content-type')
   const m = /charset=([\w-]+)/i.exec(ct)
   if (m) {
@@ -168,41 +183,97 @@ function decodeBody(data: unknown, headers: Record<string, string> | undefined):
   return new TextDecoder(enc === 'UNKNOWN' ? 'utf-8' : enc).decode(bytes)
 }
 
+/* ---------- 规则 URL ---------- */
+
+/**
+ * 拆开 legado 的 `url,{"method":"POST",...}` 形式。
+ *
+ * 书源的 `searchUrl` 常常不是一条纯 URL：搜索接口只接受 POST 表单，规则会写成
+ * `"/search.php,{"method":"POST","body":"key={{key}}","charset":"GBK"}"`。
+ * 早先这里没拆，整串被当路径拼进 URL、还按 GET 发送 —— 搜索接口当然回 404，
+ * 表现为「这个源不能用」。
+ */
+export interface UrlRule {
+  url: string
+  options: HttpOptions
+}
+
+export function splitUrlRule(raw: string): UrlRule {
+  const text = String(raw || '')
+  // 选项块从第一个 `,{` 开始，一直到结尾（JSON 里可能有嵌套的 `{}`）。
+  const at = text.indexOf(',{')
+  if (at < 0) return { url: text, options: {} }
+
+  const head = text.slice(0, at)
+  const tail = text.slice(at + 1)
+  let parsed: Record<string, any>
+  try {
+    parsed = JSON.parse(tail)
+  } catch {
+    // 不是合法 JSON：宁可整串当 URL（旧行为），也不要吞掉规则。
+    return { url: text, options: {} }
+  }
+
+  const options: HttpOptions = {}
+  const method = String(parsed.method || '').toUpperCase()
+  if (method === 'POST') options.method = 'POST'
+  const body = parsed.body ?? parsed.form
+  if (typeof body === 'string' && body) options.body = body
+  if (typeof parsed.charset === 'string' && parsed.charset) options.charset = parsed.charset
+  if (parsed.headers && typeof parsed.headers === 'object') {
+    options.headers = parsed.headers as Record<string, string>
+  }
+  return { url: head, options }
+}
+
 /* ---------- 请求 ---------- */
 
 function mergedHeaders(opts: HttpOptions): Record<string, string> {
   const headers: Record<string, string> = { ...BASE_HEADERS, ...(opts.headers || {}) }
   if (opts.referer) headers.Referer = opts.referer
+  if (opts.method === 'POST' && opts.body) {
+    // 表单提交：没有这个头，多数源站会把 body 当查询串忽略。
+    const hasType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type')
+    if (!hasType) headers['Content-Type'] = 'application/x-www-form-urlencoded'
+  }
   return headers
 }
 
-export async function httpGet(url: string, opts: HttpOptions = {}): Promise<HttpResult> {
+export async function httpRequest(url: string, opts: HttpOptions = {}): Promise<HttpResult> {
   assertPublicUrl(url)
   const headers = mergedHeaders(opts)
   const timeout = opts.timeout ?? 20000
+  const method = opts.method === 'POST' ? 'POST' : 'GET'
 
   try {
     if (isNativeShell()) {
       const r = await CapacitorHttp.request({
         url,
-        method: 'GET',
+        method,
         headers,
+        ...(method === 'POST' && opts.body ? { data: opts.body } : {}),
         responseType: 'arraybuffer',
         connectTimeout: 15000,
         readTimeout: timeout,
       })
-      return { status: r.status, text: decodeBody(r.data, r.headers), url: r.url || url }
+      return { status: r.status, text: decodeBody(r.data, r.headers, opts.charset), url: r.url || url }
     }
 
     // 浏览器开发态：第三方站点多半不给 CORS 头，只适合调试内置源。
+    // 调试第三方源请用 `--disable-web-security` 启动的浏览器。
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), timeout)
     try {
-      const r = await fetch(url, { headers, signal: ctrl.signal })
+      const r = await fetch(url, {
+        method,
+        headers,
+        body: method === 'POST' ? opts.body : undefined,
+        signal: ctrl.signal,
+      })
       const buf = await r.arrayBuffer()
       const rec: Record<string, string> = {}
       r.headers.forEach((v, k) => { rec[k] = v })
-      return { status: r.status, text: decodeBody(buf, rec), url }
+      return { status: r.status, text: decodeBody(buf, rec, opts.charset), url }
     } finally {
       clearTimeout(timer)
     }
@@ -212,6 +283,10 @@ export async function httpGet(url: string, opts: HttpOptions = {}): Promise<Http
     if (/abort|timeout|timed out/i.test(msg)) throw new SourceError('NET_TIMEOUT')
     throw new SourceError('NET_HTTP', `请求失败：${msg}`)
   }
+}
+
+export function httpGet(url: string, opts: HttpOptions = {}): Promise<HttpResult> {
+  return httpRequest(url, { ...opts, method: 'GET', body: undefined })
 }
 
 /** 二进制请求：封面用，绝不能过 TextDecoder（图片会变成乱码字符串）。 */

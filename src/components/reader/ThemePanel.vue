@@ -19,10 +19,11 @@ const themes: { id: ThemeId; color: string; dark?: boolean }[] = [
 const backgrounds = BACKGROUND_OPTIONS
 
 /**
- * -1 means "follow the system"; the slider needs a concrete number, so it
- * falls back to the same 80 the old control showed.
+ * -1 means "follow the system"; 100 is the slider's neutral end (no dimming).
+ * An untouched setting must not darken the page, so the fallback is the top of
+ * the range rather than the 80 the old placeholder showed.
  */
-const brightness = computed(() => (s.value.brightness < 0 ? 80 : s.value.brightness))
+const brightness = computed(() => (s.value.brightness < 0 ? 100 : s.value.brightness))
 </script>
 
 <template>

@@ -9,7 +9,7 @@
  * The system tab does own app chrome: the UI font family, the UI font scale and
  * the app colour scheme. None of them touch `ReaderSettings`.
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppSettingsStore, useSettingsStore } from '@/stores'
 import { useBookStore } from '@/stores'
@@ -19,6 +19,8 @@ import { fontLabelOf } from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
 import { pickAndImport } from '@/utils/importer'
 import { alertDialog, confirmDialog } from '@/utils/dialog'
+import { isNativeShell } from '@/utils/native'
+import { backupProgress, exportBackup, importBackup, saveBackup } from '@/utils/backup'
 
 const route = useRoute()
 const router = useRouter()
@@ -53,6 +55,8 @@ function saveFontScale(): void {
 const appVersion = '1.0.0'
 /** 阅读设置只改阅读页；系统设置才会作用于整个应用。「我的」页两个入口各进一页。 */
 const isSystem = route.query.tab === 'system'
+/** 防锁屏 / 横屏 / 音量键依赖原生桥；浏览器预览里它们不会生效，要说清楚。 */
+const nativeShell = isNativeShell()
 
 onMounted(() => { sourceStore.load() })
 
@@ -75,20 +79,84 @@ async function clearCache() {
     confirmText: '清理',
   })
   if (!ok) return
-  const { openRawDB } = await import('@/utils/db')
-  const db = await openRawDB()
-  await new Promise<void>((res, rej) => {
-    const t = db.transaction('files', 'readwrite')
-    const r = t.objectStore('files').clear()
-    r.onsuccess = () => res()
-    r.onerror = () => rej(r.error)
-  })
+  const { dbClear } = await import('@/utils/db')
+  await dbClear('files')
   await alertDialog({
     title: '已清理',
     message: '缓存已清理。',
     confirmText: '知道了',
   })
 }
+
+/** 导出完成后还要把字节写到磁盘（原生桥），这一段也要占住按钮并给反馈。 */
+const backupSaving = ref(false)
+const backupBusy = computed(() => backupProgress.busy || backupSaving.value)
+
+/** 备份整库到一个 zip；导出期间设置页显示进度。 */
+async function backupToFile() {
+  if (backupBusy.value) return
+  try {
+    const blob = await exportBackup()
+    backupSaving.value = true
+    const how = await saveBackup(blob)
+    backupSaving.value = false
+    const message = how.mode === 'saved'
+      ? `备份已保存到：${how.path || '文件管理器的下载目录'}。`
+      : how.mode === 'shared'
+        ? '备份文件已交给系统分享，请选择一个保存位置。'
+        : '备份文件已开始下载，请在浏览器的下载目录中查看。'
+    await alertDialog({ title: '备份完成', message, confirmText: '知道了' })
+  } catch (e) {
+    backupSaving.value = false
+    const msg = (e as Error)?.name === 'AbortError'
+      ? '已取消分享。'
+      : ((e as Error)?.message || '导出失败')
+    await alertDialog({ title: '备份未完成', message: msg, confirmText: '知道了' })
+  }
+}
+
+/** 选择一个备份文件并覆盖恢复。 */
+function pickRestoreFile() {
+  if (backupBusy.value) return
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.zip,application/zip'
+  input.style.position = 'fixed'
+  input.style.left = '-9999px'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    input.remove()
+    if (!file) return
+    const ok = await confirmDialog({
+      title: '从备份恢复',
+      message: '恢复会覆盖这台设备上的全部书籍、进度、书签和笔记，且无法撤销。建议先备份当前数据。',
+      confirmText: '覆盖恢复',
+    })
+    if (!ok) return
+    try {
+      const r = await importBackup(file)
+      await alertDialog({
+        title: '恢复完成',
+        message: `已恢复 ${r.books} 本书、${r.files} 个原始文件、${r.highlights} 条划线。应用将重新加载。`,
+        confirmText: '重新加载',
+      })
+      location.reload()
+    } catch (e) {
+      await alertDialog({
+        title: '恢复失败',
+        message: (e as Error)?.message || '备份文件无法读取',
+        confirmText: '知道了',
+      })
+    }
+  }
+  document.body.appendChild(input)
+  input.click()
+}
+
+const backupPercent = computed(() => {
+  if (!backupProgress.total) return 0
+  return Math.min(100, Math.round(backupProgress.current / backupProgress.total * 100))
+})
 
 function about() {
   void alertDialog({
@@ -165,6 +233,9 @@ function about() {
           </button>
         </div>
       </div>
+      <p v-if="!nativeShell" class="settings-hint">
+        不自动锁屏、允许横屏和音量键翻页由 Android 客户端实现，浏览器预览中不会生效。
+      </p>
 
       <!-- 听书: the engine itself is the phone's, so there is nothing to set up
            here — only how the reader behaves while it speaks. -->
@@ -277,10 +348,33 @@ function about() {
           <span class="settings-cell-value">{{ bookStore.books.length }} 本</span>
           <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
         </button>
+        <button class="settings-cell" :disabled="backupBusy" @click="backupToFile">
+          <span class="settings-cell-label">备份到文件</span>
+          <span class="settings-cell-value">
+            {{ backupSaving ? '写入中' : backupProgress.phase === 'export' ? `${backupProgress.current}/${backupProgress.total}` : 'zip' }}
+          </span>
+          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
+        </button>
+        <button class="settings-cell" :disabled="backupBusy" @click="pickRestoreFile">
+          <span class="settings-cell-label">从备份恢复</span>
+          <span class="settings-cell-value">覆盖当前数据</span>
+          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
+        </button>
         <button class="settings-cell" @click="clearCache">
           <span class="settings-cell-label">清理缓存</span>
           <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
         </button>
+      </div>
+
+      <!-- 备份/恢复是长任务：转圈之外要有可数的进度。 -->
+      <div v-if="backupProgress.busy" class="settings-progress" role="status">
+        <div class="settings-progress__track">
+          <div class="settings-progress__bar" :style="{ width: backupPercent + '%' }" />
+        </div>
+        <div class="settings-progress__text">
+          <span>{{ backupProgress.message }}</span>
+          <span>{{ backupPercent }}%</span>
+        </div>
       </div>
 
       <!-- About -->
@@ -365,6 +459,46 @@ function about() {
 
 .settings-row:last-child {
   border-bottom: none;
+}
+
+.settings-hint {
+  padding: 0 6px;
+  font-size: calc(11.5px * var(--app-font-scale));
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.settings-progress {
+  padding: 12px 14px;
+  background: var(--bg-panel);
+  border-radius: 12px;
+}
+
+.settings-progress__track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--divider);
+  overflow: hidden;
+}
+
+.settings-progress__bar {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width var(--dur-fast) linear;
+}
+
+.settings-progress__text {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: calc(12px * var(--app-font-scale));
+  color: var(--text-secondary);
+}
+
+.settings-cell:disabled {
+  opacity: 0.45;
 }
 
 .settings-row--toggle .settings-label {

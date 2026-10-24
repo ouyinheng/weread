@@ -23,6 +23,8 @@ interface CapacitorGlobal {
 }
 
 function cap(): CapacitorGlobal | undefined {
+  // Unit tests run without a DOM; every native helper must be callable there.
+  if (typeof window === 'undefined') return undefined
   return (window as unknown as { Capacitor?: CapacitorGlobal }).Capacitor
 }
 
@@ -64,6 +66,54 @@ interface SystemBarsBridge {
   getInsets?: () => string
   /** The device's font-size setting (1 = default). */
   getFontScale?: () => number
+  /* ---- 阅读模式（只在阅读页生效，退出时还原） ---- */
+  setKeepScreenOn?: (on: boolean) => void
+  setLandscapeAllowed?: (allowed: boolean) => void
+  setVolumeKeys?: (on: boolean) => void
+}
+
+declare global {
+  interface Window {
+    /**
+     * Called by the native shell when a volume key is pressed while the reader
+     * has 音量键翻页 switched on. Registered by ReaderView.
+     */
+    __readerVolumeTurn?: (dir: 'prev' | 'next') => void
+  }
+}
+
+export interface ReaderNativeMode {
+  /** 阅读时不自动锁屏 */
+  keepAwake: boolean
+  /** 阅读时允许横屏 */
+  allowLandscape: boolean
+  /** 音量键翻页 */
+  volumeKeys: boolean
+}
+
+/**
+ * Apply the reader's behaviour switches to the native window.
+ *
+ * These are not page styling: keeping the screen awake, locking the activity
+ * orientation and swallowing the volume keys all have to be done in the
+ * Activity. On the web every call is a no-op, which is why the settings page
+ * labels them as Android-only.
+ */
+export function applyReaderNativeMode(opts: ReaderNativeMode): void {
+  const b = bars()
+  if (!b) return
+  try {
+    b.setKeepScreenOn?.(opts.keepAwake)
+    b.setLandscapeAllowed?.(opts.allowLandscape)
+    b.setVolumeKeys?.(opts.volumeKeys)
+  } catch {
+    /* bridge half-injected — leave the activity's own defaults */
+  }
+}
+
+/** Leaving the reader restores normal window behaviour. */
+export function resetReaderNativeMode(): void {
+  applyReaderNativeMode({ keepAwake: false, allowLandscape: true, volumeKeys: false })
 }
 
 function bars(): SystemBarsBridge | undefined {

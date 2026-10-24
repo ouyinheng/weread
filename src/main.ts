@@ -2,11 +2,25 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import router from './router'
 import App from './App.vue'
+import { migrateToSqliteInBackground } from './utils/storage/migrate'
 import './styles/main.css'
 
 const app = createApp(App)
 app.use(createPinia())
 app.use(router)
+
+/**
+ * Ask the platform to keep our database instead of evicting it when the disk
+ * fills up. One call, no permission prompt on Android WebView for an installed
+ * app; browsers that do not support it simply return undefined.
+ */
+void navigator.storage?.persist?.()?.catch(() => { /* 不支持就算了，不影响阅读 */ })
+
+/**
+ * One-time IndexedDB → SQLite copy, off the startup path. It only flips the
+ * backend for the next launch, so a failure can never strand the live library.
+ */
+setTimeout(() => { void migrateToSqliteInBackground() }, 1500)
 
 /**
  * Warm the tab routes before the user taps them.

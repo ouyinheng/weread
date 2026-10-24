@@ -487,7 +487,7 @@ const CN_UNITS: Record<string, number> = { 十: 10, 百: 100, 千: 1000 }
 
 function cnToNumber(s: string): number | null {
   if (/^\d+$/.test(s)) return Number(s)
-  let total = 0
+  const total = 0
   let section = 0
   let num = 0
   let seen = false

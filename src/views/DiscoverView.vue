@@ -7,6 +7,7 @@ import type { Book } from '@/types'
 import type { SearchHit } from '@/types/source'
 import Icon from '@/components/Icon.vue'
 import BookCover from '@/components/BookCover.vue'
+import LoadingDots from '@/components/LoadingDots.vue'
 import { pickAndImport } from '@/utils/importer'
 import { alertDialog } from '@/utils/dialog'
 
@@ -73,6 +74,22 @@ const onlineActive = ref(false)
 const addingKey = ref('')
 const addedKeys = ref(new Set<string>())
 const picks = ref<Record<string, string>>({})
+
+/**
+ * 搜索慢到一定程度才显示三点动画：快请求不要闪一下 loading。
+ */
+const showSearchLoading = ref(false)
+let searchDelay: ReturnType<typeof setTimeout> | null = null
+
+watch(() => sourceStore.searching, (busy) => {
+  if (searchDelay) clearTimeout(searchDelay)
+  searchDelay = null
+  if (!busy) {
+    showSearchLoading.value = false
+    return
+  }
+  searchDelay = setTimeout(() => { showSearchLoading.value = true }, 400)
+})
 
 watch(searchQuery, (v) => {
   if (!v.trim() && onlineActive.value) {
@@ -217,7 +234,8 @@ async function doAction(group: HitGroup): Promise<void> {
     <!-- 在线搜索结果 -->
     <main v-if="onlineActive" class="discover__body">
       <div v-if="sourceStore.searching" class="discover__status">
-        <Icon name="search" :size="16" />
+        <LoadingDots v-if="showSearchLoading" />
+        <Icon v-else name="search" :size="16" />
         正在搜索书源…
       </div>
 

@@ -14,7 +14,20 @@ import { reactive } from 'vue'
 import { parseTxt, parseEpub, PARSER_VERSION } from './parser'
 import { dbPutMany } from './db'
 import { saveSourceFile } from './library'
+import { fingerprintOf } from './fingerprint'
+import { reportStorageIssue } from './storage-errors'
 import { useBookStore } from '@/stores'
+
+/** The file's bytes are already on the shelf; import it once, not twice. */
+export class DuplicateBookError extends Error {
+  readonly title: string
+
+  constructor(title: string) {
+    super(`《${title}》已在书架中`)
+    this.name = 'DuplicateBookError'
+    this.title = title
+  }
+}
 
 /** Extensions the parser actually handles. Anything else is refused up front. */
 export const IMPORT_ACCEPT = '.txt,.epub,.md'
@@ -105,6 +118,16 @@ export function chooseFiles(onPicked: (files: File[]) => void, multiple = true):
   }
 
   const buffer = await file.arrayBuffer()
+  // Dedup against what is already on the shelf. The store may not have been
+  // loaded yet when import runs from 设置 / 发现, so make sure first.
+  const bookStore = useBookStore()
+  if (!bookStore.books.length) await bookStore.loadBooks()
+  const fingerprint = await fingerprintOf(buffer)
+  if (fingerprint) {
+    const existing = bookStore.books.find(b => b.fingerprint === fingerprint)
+    if (existing) throw new DuplicateBookError(existing.title)
+  }
+
   const parsed = ext === 'epub'
     ? await parseEpub(buffer, file.name)
     : await parseTxt(buffer, file.name)
@@ -126,6 +149,7 @@ export function chooseFiles(onPicked: (files: File[]) => void, multiple = true):
     finished: false,
     parserVersion: PARSER_VERSION,
     sourceName: file.name,
+    fingerprint,
   }
 
   // Chapters go in one transaction: a 3000-chapter book would take minutes with
@@ -144,10 +168,14 @@ export function chooseFiles(onPicked: (files: File[]) => void, multiple = true):
   await useBookStore().addBook(book as any)
 
   // Keep the original bytes so a future parser upgrade can rebuild in place.
-  // Failure here is not fatal — the book is already readable.
+  // Failure here is not fatal — the book is already readable — but it is not
+  // silent either: without the bytes, "就地重建" and the backup's source copy
+  // are gone, so the user gets told once.
   try {
     await saveSourceFile(id, file.name, buffer)
-  } catch { /* quota: the book still reads */ }
+  } catch (e) {
+    reportStorageIssue('原始书籍文件未能存入本地存储，这本书将无法就地重建，备份中也会缺少原文件', e)
+  }
 
   return id
 }
@@ -175,6 +203,7 @@ export async function importFiles(files: File[]): Promise<string[]> {
   importState.index = 0
 
   const ids: string[] = []
+  let duplicates = 0
   try {
     for (let i = 0; i < usable.length; i++) {
       const file = usable[i]
@@ -183,7 +212,8 @@ export async function importFiles(files: File[]): Promise<string[]> {
       try {
         ids.push(await importBookFile(file))
       } catch (e: any) {
-        importState.error = `${file.name}：${e?.message || '导入失败'}`
+        if (e instanceof DuplicateBookError) duplicates++
+        else importState.error = `${file.name}：${e?.message || '导入失败'}`
       }
       // Yield so the overlay repaints between files.
       await new Promise(r => setTimeout(r, 0))
@@ -195,8 +225,14 @@ export async function importFiles(files: File[]): Promise<string[]> {
     importState.index = 0
   }
 
+  if (!ids.length && duplicates && !importState.error) {
+    notify(duplicates === 1 ? '这本书已在书架中' : `这 ${duplicates} 本都已在书架中`)
+    return ids
+  }
   if (ids.length && !importState.error) {
-    notify(ids.length === 1 ? '已导入 1 本' : `已导入 ${ids.length} 本`)
+    notify(duplicates
+      ? `已导入 ${ids.length} 本，${duplicates} 本已存在`
+      : ids.length === 1 ? '已导入 1 本' : `已导入 ${ids.length} 本`)
   } else if (ids.length) {
     notify(`已导入 ${ids.length} 本，${skipped ? `${skipped} 个文件被跳过` : '部分文件失败'}`)
   }

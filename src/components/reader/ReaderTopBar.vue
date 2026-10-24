@@ -24,6 +24,7 @@ const emit = defineEmits<{
   share: []
   more: []
   notes: []
+  search: []
 }>()
 </script>
 
@@ -34,6 +35,10 @@ const emit = defineEmits<{
     </button>
 
     <div class="topbar__actions">
+      <!-- 书内搜索：找正文里的一句话，而不只是章节名。 -->
+      <button class="topbar__action" @click="emit('search')" aria-label="搜索本书">
+        <Icon name="search" :size="21" :width="1.9" />
+      </button>
       <!-- 想法: person glyph with the count set beside its shoulder. -->
       <button class="topbar__action" @click="emit('notes')" aria-label="想法">
         <Icon name="person" :size="21" :width="1.8" />

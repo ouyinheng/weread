@@ -8,12 +8,12 @@ import type { BookInfo, BookSource, RemoteChapter, SearchHit } from '@/types/sou
 import { SourceError } from '@/types/source'
 import type { ChapterRaw } from '@/utils/parser'
 import { absUrl, extract, extractAll, query } from './selector'
-import { globalGate, httpGet, parseHtml, Semaphore, sleep, sourceHeaders } from './net'
+import { globalGate, httpRequest, parseHtml, Semaphore, sleep, sourceHeaders, splitUrlRule, type HttpOptions } from './net'
 
 export interface SourceCtx {
   source: BookSource
   vars: Record<string, any>
-  doc(url: string, referer?: string): Promise<Document>
+  doc(url: string, referer?: string, options?: HttpOptions): Promise<Document>
 }
 
 export function makeCtx(source: BookSource): SourceCtx {
@@ -24,8 +24,9 @@ export function makeCtx(source: BookSource): SourceCtx {
   return {
     source,
     vars,
-    async doc(url, referer) {
-      const r = await globalGate.run(() => gate.run(() => httpGet(url, { headers: extra, referer })))
+    async doc(url, referer, options) {
+      const opts: HttpOptions = { headers: { ...extra, ...(options?.headers || {}) }, referer, ...options }
+      const r = await globalGate.run(() => gate.run(() => httpRequest(url, opts)))
       if (r.status !== 200) throw new SourceError('NET_HTTP', `源站返回 HTTP ${r.status}`)
       return parseHtml(r.text)
     },
@@ -38,13 +39,19 @@ function rules(source: BookSource, key: 'ruleSearch' | 'ruleBookInfo' | 'ruleToc
   return v && typeof v === 'object' ? v : {}
 }
 
-/** 模板填充：`{{key}}` 要 URL 编码，`{{page}}` 不编码。 */
-export function fillTemplate(tpl: string, vars: Record<string, string>, base: string): string {
+/** 模板填充：只换变量，不做 URL 补全（表单 body 用）。 */
+export function fillVars(tpl: string, vars: Record<string, string>): string {
   let out = tpl.replace(/\{\{key\}\}/g, encodeURIComponent(vars.key ?? ''))
   for (const [k, v] of Object.entries(vars)) {
     if (k === 'key') continue
     out = out.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v)
   }
+  return out
+}
+
+/** 模板填充：`{{key}}` 要 URL 编码，`{{page}}` 不编码，相对路径补成绝对地址。 */
+export function fillTemplate(tpl: string, vars: Record<string, string>, base: string): string {
+  const out = fillVars(tpl, vars)
   if (/^https?:/i.test(out)) return out
   try {
     return new URL(out.replace(/^\/+/, ''), base.replace(/\/+$/, '') + '/').toString()
@@ -58,8 +65,18 @@ export async function search(ctx: SourceCtx, key: string, page = 1): Promise<Sea
   const rs = rules(ctx.source, 'ruleSearch')
   if (!raw.searchUrl || !rs.bookList) return []
 
-  const url = fillTemplate(String(raw.searchUrl), { key, page: String(page) }, ctx.source.url)
-  const doc = await ctx.doc(url)
+  /*
+   * `searchUrl` 可能是 `url,{"method":"POST","body":"searchkey={{key}}"}`。
+   * 拆错的话整串 JSON 会被当成路径拼到 URL 后面、还会按 GET 发出去，搜索接口
+   * 直接 404 —— 这是绝大多数「导入后搜不到」的来源。
+   */
+  const rule = splitUrlRule(String(raw.searchUrl))
+  const vars = { key, page: String(page) }
+  const url = fillTemplate(rule.url, vars, ctx.source.url)
+  const options: HttpOptions = { ...rule.options }
+  if (options.body) options.body = fillVars(options.body, vars)
+
+  const doc = await ctx.doc(url, undefined, options)
 
   return extractAll(doc, rs.bookList)
     .map(el => ({

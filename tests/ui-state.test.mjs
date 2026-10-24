@@ -1,8 +1,6 @@
 // Back-press routing and app-level settings are pure logic; pin them down so
 // the "back exits the app" class of bug cannot return silently.
 import 'fake-indexeddb/auto'
-import { reactive } from 'vue'
-import { dbPut } from '../src/utils/db.ts'
 
 let fail = 0
 const check = (n, c, e = '') => {
@@ -31,7 +29,7 @@ check('matching close clears', uiState.overlay === '' && uiState.closeOverlay ==
 /* ---------- back-press decision logic ----------
  * Mirrors App.vue's handler: overlay → router stack → tab root exits.
  */
-function decide({ overlay, isTab, historyLength, routeName }) {
+function decide({ overlay, isTab, historyLength, routeName: _routeName }) {
   if (overlay) return 'close-overlay'
   if (historyLength > 1 && !isTab) return 'router-back'
   if (isTab) return 'exit-app'

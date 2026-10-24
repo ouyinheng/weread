@@ -91,3 +91,5 @@ check('keeps harmless spacing', /margin-top/.test(spacing), spacing)
 const bg = extractBodyHtml('<body><p style="background:#fff">x</p></body>')
 check('strips background', !/background/i.test(bg), bg)
 
+process.exit(fail === 0 ? 0 : 1)
+

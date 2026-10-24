@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto'
 import { readFileSync } from 'fs'
 import { parseTxt } from './src/utils/parser.ts'
-import { dbPut, dbPutMany, dbGetAll, dbDelete, dbDeleteByIndex } from './src/utils/db.ts'
+import { dbPut, dbPutMany, dbGetAll, dbDeleteByIndex } from './src/utils/db.ts'
 
 let fail = 0
 const check = (name, cond, extra='') => {

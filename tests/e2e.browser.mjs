@@ -166,7 +166,6 @@ try {
     JSON.stringify({ strideCoverage, scrollW: geom.scrollW }))
 
   /* ---------- 7. tapping right advances a page ---------- */
-  const firstTransform = reader.transform
   const tapResult = await page.evaluate(`(async () => {
     const vp = document.querySelector('.reader__viewport')
     const r = vp.getBoundingClientRect()
@@ -273,7 +272,8 @@ try {
   check('reload restores saved chapter', (restored.status || '').includes('第3章'), JSON.stringify(restored))
 
   /* ---------- 11. themes apply ---------- */
-  const theme = await page.evaluate(`(async () => {
+  /* Side effects only: the settings write is what the later `themed` probe reads. */
+  await page.evaluate(`(async () => {
     localStorage.setItem('theme-test', '1')
     const settings = indexedDB.open('weread')
     const db = await new Promise((res, rej) => {

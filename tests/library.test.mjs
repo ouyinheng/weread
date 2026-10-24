@@ -2,7 +2,7 @@
 // users keep broken markup from older parses forever.
 import 'fake-indexeddb/auto'
 import { readFileSync } from 'fs'
-import { dbPut, dbPutMany, dbGet, dbGetAll, dbDeleteByIndex } from '../src/utils/db.ts'
+import { dbPut, dbPutMany, dbGet, dbGetAll } from '../src/utils/db.ts'
 import { PARSER_VERSION, parseEpub } from '../src/utils/parser.ts'
 import { saveSourceFile, loadSourceFile, rebuildBook, needsRebuild } from '../src/utils/library.ts'
 

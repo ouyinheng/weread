@@ -1,4 +1,4 @@
-import { detectEncoding, segmentTxt } from './src/utils/parser.ts'
+import { detectEncoding } from './src/utils/parser.ts'
 
 let fail = 0
 const check = (n, cond, extra='') => { console.log(cond?'ok  ':'FAIL', n, cond?'':extra); if(!cond) fail++ }

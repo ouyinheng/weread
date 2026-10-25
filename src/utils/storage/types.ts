@@ -29,7 +29,16 @@ export type StoreName = (typeof STORES)[number]
 
 export type StoreKey = string | number | [string, number]
 
+/** Which backend a driver instance talks to. */
+export type Backend = 'sqlite' | 'indexeddb'
+
 export interface DBDriver {
+  /**
+   * Identity of the backend, not a capability flag: the settings page shows it
+   * so "did the migration actually take effect" is answerable on a real device
+   * instead of by reading code.
+   */
+  readonly backend: Backend
   open(): Promise<void>
   get(store: StoreName, key: StoreKey): Promise<any>
   getAll(store: StoreName): Promise<any[]>
@@ -39,6 +48,8 @@ export interface DBDriver {
   putRaw(store: StoreName, value: any): Promise<void>
   putMany(store: StoreName, rows: any[]): Promise<void>
   delete(store: StoreName, key: StoreKey): Promise<void>
+  /** Remove many keys in as few round-trips as possible (one transaction per driver batch). */
+  deleteMany(store: StoreName, keys: StoreKey[]): Promise<void>
   deleteByIndex(store: StoreName, index: string, key: string | number): Promise<void>
   clear(store: StoreName): Promise<void>
   close(): Promise<void>

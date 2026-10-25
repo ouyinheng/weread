@@ -2,7 +2,10 @@
 // That silently broke every progress write, so store state must be de-proxied.
 import 'fake-indexeddb/auto'
 import { reactive, ref } from 'vue'
-import { dbPut, dbPutMany, dbGet, dbGetAll, dbDelete, dbDeleteByIndex } from '../src/utils/db.ts'
+import {
+  dbPut, dbPutMany, dbGet, dbGetAll, dbDelete, dbDeleteByIndex,
+  resetDriver, storageBackend,
+} from '../src/utils/db.ts'
 
 let fail = 0
 const check = (name, cond, extra = '') => {
@@ -68,6 +71,23 @@ const check = (name, cond, extra = '') => {
   check('delete by index purges rows', all.filter(r => r.bookId === 'b1').length === 0, all.length)
   await dbDelete('books', 'p1')
   check('delete by key removes record', (await dbGet('books', 'p1')) === undefined, '')
+}
+
+/* ---------- driver reset: the SQLite migration hands the session over ---------- */
+{
+  const before = await dbGet('books', 'p4')
+  check('backend is indexeddb in the browser', (await storageBackend()) === 'indexeddb')
+
+  await resetDriver()
+  check('backend report survives a reset', (await storageBackend()) === 'indexeddb')
+
+  // The reset closes the old connection; the replacement must reopen the same
+  // database rather than hand back an empty store.
+  const after = await dbGet('books', 'p4')
+  check('data survives a driver reset', after?.title === 'clean' && before?.title === 'clean', JSON.stringify(after))
+
+  await dbPut('books', { id: 'p5', title: 'after-reset' })
+  check('writes work after a reset', (await dbGet('books', 'p5'))?.title === 'after-reset')
 }
 
 console.log(fail === 0 ? '\nALL PASS' : `\n${fail} FAILED`)

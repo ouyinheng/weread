@@ -80,6 +80,43 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   check('ended after last', player.status.value === 'ended', player.status.value)
 }
 
+/* ---------- queuing engines get one sentence of lookahead ---------- */
+{
+  const spoken = []
+  const pending = []
+  const engine = {
+    kind: 'native',
+    canLookahead: () => true,
+    async speak(text) {
+      spoken.push(text)
+      await new Promise((resolve, reject) => { pending.push({ resolve, reject }) })
+    },
+    async stop() {
+      const list = pending.splice(0)
+      for (const p of list) p.reject(new TtsCancelled())
+    },
+    async voices() { return [] },
+  }
+  const player = useListenPlayer({
+    sentences: () => sentences,
+    settings: () => baseSettings,
+    createEngine: async () => engine,
+  })
+
+  void player.play(0)
+  await tick()
+  check(
+    'queues the next sentence while the first is still playing',
+    spoken.length === 2 && spoken[1] === '第二句。',
+    JSON.stringify(spoken)
+  )
+  check('highlight stays on the sentence being spoken', player.index.value === 0, player.index.value)
+
+  pending.shift().resolve(); await tick()
+  check('advanced once the first finished', player.index.value === 1, player.index.value)
+  check('queued a third while the second plays', spoken[2] === '第三句。', JSON.stringify(spoken))
+}
+
 /* ---------- pause keeps the sentence, resume speaks it again ---------- */
 {
   const fake = fakeEngine()

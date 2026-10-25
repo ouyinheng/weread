@@ -135,10 +135,20 @@ export function take(el: Element | null | undefined, attr = 'text', clean = ''):
       v = ((el as HTMLElement).innerText || el.textContent || '').trim()
       break
     default:
-      v = (el.getAttribute(attr) || '').trim()
+      /*
+       * `extract()` can be handed a Document (rules like `@href` evaluate at
+       * document scope), and Document has no getAttribute — the old code threw
+       * "el.getAttribute is not a function", which surfaced as a source that
+       * simply could not be used. Treat it as "no value".
+       */
+      v = typeof el.getAttribute === 'function' ? (el.getAttribute(attr) || '').trim() : ''
       // 懒加载图片：src 为空时退到 data-src；href 常见退到 data-href。
-      if (!v && a === 'src') v = el.getAttribute('data-src') || ''
-      if (!v && a === 'href') v = el.getAttribute('data-href') || ''
+      if (!v && a === 'src' && typeof el.getAttribute === 'function') {
+        v = el.getAttribute('data-src') || ''
+      }
+      if (!v && a === 'href' && typeof el.getAttribute === 'function') {
+        v = el.getAttribute('data-href') || ''
+      }
       break
   }
 

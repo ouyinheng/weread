@@ -33,7 +33,6 @@ setTimeout(() => { void migrateToSqliteInBackground() }, 1500)
 router.isReady().then(() => {
   const warm = () => {
     void import('@/views/ShelfView.vue')
-    void import('@/views/DiscoverView.vue')
     void import('@/views/MeView.vue')
   }
   if (typeof requestIdleCallback === 'function') requestIdleCallback(warm)

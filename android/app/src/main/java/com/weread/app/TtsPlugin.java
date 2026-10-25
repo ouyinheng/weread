@@ -138,9 +138,11 @@ public class TtsPlugin extends Plugin {
 
         String utteranceId = UUID.randomUUID().toString();
         Bundle params = new Bundle();
-        // QUERY_FLUSH is not wanted here: the player stops explicitly before it
-        // starts the next sentence, so FLUSH would only add a stutter.
-        int queued = engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
+        // QUEUE_ADD lets the JS player hand us the next sentence while this one
+        // is still playing, so the engine synthesises ahead instead of leaving
+        // a silent gap. Every playback path calls stop() first, so the queue is
+        // empty when a new run starts; FLUSH is not needed.
+        int queued = engine.speak(text, TextToSpeech.QUEUE_ADD, params, utteranceId);
         JSObject out = new JSObject();
         out.put("utteranceId", utteranceId);
         out.put("queued", queued == TextToSpeech.SUCCESS);

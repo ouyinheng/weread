@@ -219,6 +219,12 @@ export type EngineReason =
 export interface TtsEngine {
   kind: EngineKind
   reason?: EngineReason
+  /**
+   * True when `speak()` queues behind the current utterance instead of
+   * replacing it. The player then sends one sentence ahead so the engine can
+   * synthesise it while the previous one is still playing.
+   */
+  canLookahead?(voice?: string): boolean
   /** Resolves when the utterance has finished playing. */
   speak(text: string, rate: number, voice?: string): Promise<void>
   /** Stops immediately; any in-flight `speak()` rejects as cancelled. */
@@ -246,6 +252,9 @@ function noneEngine(reason: EngineReason): TtsEngine {
     stop() {
       return Promise.resolve()
     },
+    canLookahead() {
+      return false
+    },
     voices() {
       return Promise.resolve([])
     },
@@ -270,6 +279,9 @@ async function nativeEngine(plugin: NativeTtsPlugin): Promise<TtsEngine> {
 
   return {
     kind: 'native',
+    // Android queues with QUEUE_ADD, so the next sentence can be prepared while
+    // the current one is still playing.
+    canLookahead: () => true,
     async speak(text, rate, voice) {
       const { utteranceId, queued } = await plugin.speak({ text, rate, voice })
       if (!queued) throw new Error('tts-rejected')
@@ -309,6 +321,8 @@ function webEngine(): TtsEngine | null {
 
   return {
     kind: 'web',
+    // `speechSynthesis.speak` appends to its own queue.
+    canLookahead: () => true,
     speak(text, rate, voice) {
       return new Promise<void>((resolve, reject) => {
         const utter = new SpeechSynthesisUtterance(text)
@@ -356,6 +370,9 @@ async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
 
   return {
     kind: 'native',
+    // One sentence per WebSocket: speaking the next one cancels the current,
+    // so the player must stay strictly sequential here.
+    canLookahead: () => false,
     async speak(text, rate, voice) {
       const curated = EDGE_VOICES.find(v => v.id === voice) || EDGE_VOICES[0]
       const { utteranceId, queued } = await plugin.speak({
@@ -396,6 +413,12 @@ function compositeEngine(system: TtsEngine, edge: TtsEngine): TtsEngine {
 
   return {
     kind: 'native',
+    canLookahead(voice) {
+      // Online voices are one-shot per sentence; only the on-device engine can
+      // queue a second sentence behind the current one.
+      if (isOnline(voice)) return false
+      return system.kind !== 'none' && system.canLookahead?.(voice) === true
+    },
     speak(text, rate, voice) {
       if (isOnline(voice)) return edge.speak(text, rate, voice)
       if (system.kind === 'none') return edge.speak(text, rate, EDGE_VOICES[0].id)

@@ -121,8 +121,15 @@ export function createSqliteDriver(): SQLiteDriver {
 
   async function getAllByIndex(store: StoreName, index: string, key: string | number): Promise<any[]> {
     if (store === 'files') return legacyFiles.getAllByIndex('files', index, key)
+    // Reject unknown indexes loudly. Returning [] here would look exactly like
+    // "this book has no chapters" and silently strand data in the UI.
+    if (index !== 'bookId') {
+      throw new Error(`SQLite 驱动只建了 bookId 索引，收到 ${index}（${store}）`)
+    }
+    if (!BOOK_INDEXED.includes(store as SqlStore)) {
+      throw new Error(`${store} 不支持按 bookId 查询`)
+    }
     const table = TABLES[store as SqlStore]
-    if (index !== 'bookId' || !BOOK_INDEXED.includes(store as SqlStore)) return []
     return queryJson(`SELECT data FROM ${table} WHERE book_id = ?`, [String(key)])
   }
 
@@ -190,10 +197,63 @@ export function createSqliteDriver(): SQLiteDriver {
     await requireDb().run(`DELETE FROM ${TABLES[store as SqlStore]} WHERE id = ?`, [String(key)])
   }
 
+  /**
+   * Batched delete. Sources are keyed by URL, so `DELETE ... WHERE id IN (...)`
+   * turns "purge 800 dead sources" into two statements instead of 800 bridge
+   * round-trips. The whole purge runs in one transaction, matching IndexedDB:
+   * a failure leaves every source in place instead of half of them.
+   */
+  async function deleteMany(store: StoreName, keys: StoreKey[]): Promise<void> {
+    if (!keys.length) return
+    if (store === 'files') return legacyFiles.deleteMany('files', keys)
+    await open()
+
+    // Composite keys cannot share one IN statement (chapters are keyed by
+    // book_id + idx), so they keep the per-row path, still inside a transaction.
+    if (store === 'chapters' || keys.some(k => Array.isArray(k))) {
+      const BATCH = 200
+      for (let i = 0; i < keys.length; i += BATCH) {
+        const set = keys.slice(i, i + BATCH).map(k => {
+          if (store === 'chapters') {
+            const [bookId, index] = k as [string, number]
+            return {
+              statement: 'DELETE FROM chapters WHERE book_id = ? AND idx = ?',
+              values: [bookId, index],
+            }
+          }
+          return {
+            statement: `DELETE FROM ${TABLES[store as SqlStore]} WHERE id = ?`,
+            values: [String(k)],
+          }
+        })
+        await requireDb().executeSet(set, true)
+      }
+      return
+    }
+
+    const table = TABLES[store as SqlStore]
+    // 400 placeholders keeps the statement well under SQLite's variable limit.
+    const BATCH = 400
+    const set: { statement: string; values: string[] }[] = []
+    for (let i = 0; i < keys.length; i += BATCH) {
+      const chunk = keys.slice(i, i + BATCH).map(k => String(k))
+      const holes = chunk.map(() => '?').join(',')
+      set.push({ statement: `DELETE FROM ${table} WHERE id IN (${holes})`, values: chunk })
+    }
+    await requireDb().executeSet(set, true)
+  }
+
   async function deleteByIndex(store: StoreName, index: string, key: string | number): Promise<void> {
     if (store === 'files') return legacyFiles.deleteByIndex('files', index, key)
+    // Same reasoning as getAllByIndex: a no-op delete that reports success is
+    // worse than an error, because the orphaned rows only surface much later.
+    if (index !== 'bookId') {
+      throw new Error(`SQLite 驱动只建了 bookId 索引，收到 ${index}（${store}）`)
+    }
+    if (!BOOK_INDEXED.includes(store as SqlStore)) {
+      throw new Error(`${store} 不支持按 bookId 删除`)
+    }
     const table = TABLES[store as SqlStore]
-    if (index !== 'bookId' || !BOOK_INDEXED.includes(store as SqlStore)) return
     await open()
     await requireDb().run(`DELETE FROM ${table} WHERE book_id = ?`, [String(key)])
   }
@@ -224,6 +284,7 @@ export function createSqliteDriver(): SQLiteDriver {
   }
 
   return {
+    backend: 'sqlite',
     open,
     get,
     getAll,
@@ -233,6 +294,7 @@ export function createSqliteDriver(): SQLiteDriver {
     putRaw,
     putMany,
     delete: del,
+    deleteMany,
     deleteByIndex,
     clear,
     close,

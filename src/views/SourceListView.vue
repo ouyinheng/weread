@@ -25,6 +25,67 @@ const importText = ref('')
 const importBusy = ref(false)
 const importError = ref('')
 
+/*
+ * 大合集的粘贴不走 textarea。
+ *
+ * 一份全量书源约 2MB / 几十万字符，塞进 `<textarea v-model>` 会让 WebView 每次
+ * 输入事件都重排这几兆文本，手机上表现为卡死甚至被系统杀掉 —— 用户看到的就是
+ * 「这么长的 JSON 导不进来」。这里在 paste 事件里就把它截下来，存在普通变量里
+ * （非响应式，不进 DOM），界面上只显示一行摘要。
+ *
+ * 真机上更推荐「从文件导入」，连粘贴都省了。
+ */
+const LARGE_PASTE = 100_000
+let bigPayload = ''
+const bigSize = ref(0)
+const fileInput = ref<HTMLInputElement>()
+
+const bigSummary = computed(() => {
+  if (!bigSize.value) return ''
+  const mb = bigSize.value / 1024 / 1024
+  return mb >= 1
+    ? `${mb.toFixed(1)} MB 文本已就绪`
+    : `${Math.round(bigSize.value / 1024)} KB 文本已就绪`
+})
+
+function holdBig(text: string) {
+  bigPayload = text
+  bigSize.value = text.length
+  // 让 textarea 保持空，避免同一份内容被渲染两遍。
+  importText.value = ''
+  importError.value = ''
+}
+
+function clearBig() {
+  bigPayload = ''
+  bigSize.value = 0
+  importText.value = ''
+}
+
+/** 粘贴时劫持大文本：小的交给 textarea，大的只留摘要。 */
+function onJsonPaste(e: ClipboardEvent) {
+  const text = e.clipboardData?.getData('text') ?? ''
+  if (text.length <= LARGE_PASTE) return
+  e.preventDefault()
+  holdBig(text)
+}
+
+function pickFile() {
+  fileInput.value?.click()
+}
+
+async function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 允许再次选择同一个文件
+  if (!file) return
+  try {
+    holdBig(await file.text())
+  } catch (err) {
+    importError.value = `读取文件失败：${(err as Error).message || '未知错误'}`
+  }
+}
+
 /** 全量合集有几千条，一次性渲染会卡死列表，这里按关键词过滤 + 分批显示。 */
 const PAGE_SIZE = 60
 const filter = ref('')
@@ -106,9 +167,10 @@ async function removeSource(s: BookSource): Promise<void> {
 
 async function doImport(): Promise<void> {
   if (importBusy.value) return
-  const text = importMode.value === 'url' ? importUrl.value : importText.value
+  // 大文本存在 bigPayload 里；小的照旧从 textarea 取。
+  const text = importMode.value === 'url' ? importUrl.value : (bigPayload || importText.value)
   if (!text.trim()) {
-    importError.value = importMode.value === 'url' ? '请先填写书源链接' : '请先粘贴书源 JSON'
+    importError.value = importMode.value === 'url' ? '请先填写书源链接' : '请先粘贴书源 JSON 或选择文件'
     return
   }
   importBusy.value = true
@@ -116,7 +178,7 @@ async function doImport(): Promise<void> {
   try {
     const r = await store.importText(text)
     importUrl.value = ''
-    importText.value = ''
+    clearBig()
     showImport.value = false
     const skipped = r.skipped ? `，跳过 ${r.skipped} 个音频/图片或无效条目` : ''
     await alertDialog({
@@ -138,6 +200,60 @@ async function checkAll(): Promise<void> {
   const done = store.checkProgress.done
   const capped = done < total ? `本次先体检了 ${done} 个，再点一次可继续。` : `已体检 ${done} 个书源。`
   await alertDialog({ title: '体检完成', message: `健康度已更新，${capped}点进单个书源可看哪一段失败。`, confirmText: '知道了' })
+}
+
+/** 失效源里有多少本书还挂在书架上：删源后这些书的未缓存章节会抓不到。 */
+const deadBookCount = computed(() => {
+  const dead = new Set(store.deadSources.map(s => s.id))
+  return bookStore.books.filter(b => b.sourceId && dead.has(b.sourceId)).length
+})
+
+/**
+ * 一次清掉所有失效书源。
+ *
+ * 判死需要连续两次请求失败，且断网期间不记失败；这里仍把即将删掉的源名摆出来，
+ * 让用户确认没有误伤。降级（能搜到、读不到正文）和未检测的源不在清理范围内。
+ */
+async function purgeDead(): Promise<void> {
+  if (store.checking) return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    await alertDialog({
+      title: '当前没有网络',
+      message: '断网时请求失败只是连不上，不代表书源失效。连上网再清除，避免误删。',
+      confirmText: '知道了',
+    })
+    return
+  }
+  const dead = store.deadSources
+  if (!dead.length) {
+    await alertDialog({
+      title: '没有失效书源',
+      message: '还没有判定为失效的书源。先点「全部体检」查一遍，失败的源会标红，之后再回来一次清掉。',
+      confirmText: '知道了',
+    })
+    return
+  }
+
+  const names = dead.slice(0, 5).map(s => `· ${s.name}`).join('\n')
+  const more = dead.length > 5 ? `\n· 另 ${dead.length - 5} 个` : ''
+  const books = deadBookCount.value
+  const bookNote = books
+    ? `\n\n书架上有 ${books} 本书来自这些源：书和已缓存章节都保留，只是没缓存的章节抓不到了。`
+    : ''
+  const ok = await confirmDialog({
+    title: `清除 ${dead.length} 个失效书源`,
+    message: `连续两次请求失败，判定为失效：\n${names}${more}${bookNote}\n\n降级和未检测的源不会删。`,
+    confirmText: '清除',
+    danger: true,
+  })
+  if (!ok) return
+
+  try {
+    const n = await store.removeDead()
+    await alertDialog({ title: '已清除', message: `已删除 ${n} 个失效书源。`, confirmText: '知道了' })
+  } catch (e) {
+    await alertDialog({ title: '清除失败', message: (e as Error).message })
+  }
 }
 
 async function clearCache(): Promise<void> {
@@ -184,11 +300,14 @@ async function clearCache(): Promise<void> {
       </div>
 
       <div v-if="store.sources.length" class="src-actions">
-        <button class="src-action" :disabled="store.checking || !store.sources.length" @click="checkAll">
+        <button class="src-action" :disabled="store.checking" @click="checkAll">
           <template v-if="store.checking">
             体检中 {{ store.checkProgress.done }}/{{ store.checkProgress.total }}
           </template>
           <template v-else>全部体检</template>
+        </button>
+        <button class="src-action" :disabled="store.checking" @click="purgeDead">
+          清除失效<template v-if="store.deadSources.length">（{{ store.deadSources.length }}）</template>
         </button>
         <button class="src-action" @click="clearCache">清除已缓存正文</button>
       </div>
@@ -279,12 +398,37 @@ async function clearCache(): Promise<void> {
           </p>
         </template>
         <template v-else>
-          <p class="src-sheet__hint">粘贴书源 JSON（单个对象或数组）。</p>
+          <p class="src-sheet__hint">
+            粘贴书源 JSON（单个对象或数组）。大合集（几 MB）建议用文件导入，或直接填直链。
+          </p>
+
+          <button class="src-sheet__file" @click="pickFile">
+            <Icon name="import" :size="16" :width="1.8" />
+            <span>从文件导入 .json</span>
+          </button>
+          <input
+            ref="fileInput"
+            class="src-sheet__fileinput"
+            type="file"
+            accept=".json,.txt,application/json,text/plain"
+            @change="onFileChange"
+          />
+
+          <!--
+            超过阈值的内容不进 textarea：几十万字符渲染会让 WebView 卡死。
+            这里只留一行摘要，原文在 bigPayload 里，导入时照样能用。
+          -->
+          <div v-if="bigSize" class="src-sheet__big">
+            <span class="src-sheet__big-text">{{ bigSummary }}</span>
+            <button class="src-sheet__big-clear" @click="clearBig">清除</button>
+          </div>
           <textarea
+            v-else
             v-model="importText"
             class="src-sheet__input"
             placeholder='[{"bookSourceUrl":"https://example.com","bookSourceName":"示例","bookSourceType":0,...}]'
             spellcheck="false"
+            @paste="onJsonPaste"
           />
         </template>
         <p v-if="importError" class="src-sheet__error">{{ importError }}</p>
@@ -545,12 +689,14 @@ async function clearCache(): Promise<void> {
 
 .src-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   flex-shrink: 0;
 }
 
+/* 两个一行：400dp 宽的屏上三等分会把「清除失效（12）」挤到换行。 */
 .src-action {
-  flex: 1;
+  flex: 1 1 calc(50% - 5px);
   height: 46px;
   border-radius: 10px;
   background: var(--bg-panel);
@@ -665,6 +811,50 @@ async function clearCache(): Promise<void> {
 .src-sheet__error {
   font-size: calc(12px * var(--app-font-scale));
   color: #E35B5B;
+}
+
+/*
+ * 文件导入 / 大文本摘要。两者都是为了绕开「把几兆字符塞进 textarea」这条路：
+ * 手机上那样做会卡住整个 WebView。
+ */
+.src-sheet__file {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px dashed var(--divider);
+  background: var(--bg-page);
+  color: var(--accent);
+  font-size: calc(13px * var(--app-font-scale));
+}
+
+.src-sheet__fileinput {
+  display: none;
+}
+
+.src-sheet__big {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 56px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg-page);
+  border: 1px solid var(--divider);
+}
+
+.src-sheet__big-text {
+  font-size: calc(13px * var(--app-font-scale));
+  color: var(--text);
+}
+
+.src-sheet__big-clear {
+  flex-shrink: 0;
+  font-size: calc(12px * var(--app-font-scale));
+  color: var(--text-secondary);
 }
 
 .src-sheet__actions {

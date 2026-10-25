@@ -11,6 +11,7 @@ import { SourceError } from '@/types/source'
 import {
   dbDelete,
   dbDeleteByIndex,
+  dbDeleteMany,
   dbGet,
   dbGetAll,
   dbPut,
@@ -130,6 +131,22 @@ export async function deleteSource(id: string): Promise<void> {
   await dbDelete('sources', id)
 }
 
+/**
+ * 批量删除书源（清理失效源用）。
+ *
+ * 全量合集里失效源动辄几百上千条，一条一次 delete 会让页面卡住十几秒；
+ * 这里交给驱动的批量删除，一次事务搞定。
+ *
+ * 返回提交删除的唯一条数。调用方传的 id 都从当前列表里挑出来，所以这个数就是
+ * 实删数；为了它再去全表读一遍几千条 JSON 不划算。
+ */
+export async function deleteSources(ids: string[]): Promise<number> {
+  const unique = [...new Set(ids.filter(Boolean))]
+  if (!unique.length) return 0
+  await dbDeleteMany('sources', unique)
+  return unique.length
+}
+
 export interface ImportResult {
   /** JSON 里的条目总数。 */
   total: number
@@ -187,8 +204,12 @@ export async function importSourcesFromText(text: string): Promise<ImportResult>
   if (!jsonText.trim()) throw new SourceError('RULE_EMPTY', '没有可导入的内容')
 
   if (src.kind === 'url') {
+    /*
+     * 全量合集有 2–20MB，慢速 CDN 上单个 2MB 文件实测就要 60 秒以上。60 秒的
+     * 超时会让「链接导入」在快完成时失败，用户看到的就是「这么大的 JSON 导不进来」。
+     */
     const r = await httpGet(src.value, {
-      timeout: 60000,
+      timeout: 180000,
       headers: { Accept: 'application/json,text/plain,*/*' },
     })
     if (r.status !== 200) throw new SourceError('NET_HTTP', `书源地址返回 HTTP ${r.status}`)
@@ -223,7 +244,7 @@ export async function importSourcesFromText(text: string): Promise<ImportResult>
     const old = existing.get(s.id)
     // 重新导入同一地址时保留体检结果，只更新规则。
     return old
-      ? { ...s, health: old.health, lastCheckAt: old.lastCheckAt, lastError: old.lastError }
+      ? { ...s, health: old.health, failStreak: old.failStreak, lastCheckAt: old.lastCheckAt, lastError: old.lastError }
       : s
   })
 
@@ -252,6 +273,7 @@ export async function updateSourceRaw(id: string, jsonText: string): Promise<Boo
   const prev = await getSource(id)
   if (!prev) throw new SourceError('SRC_NOT_FOUND')
   next.health = prev.health
+  next.failStreak = prev.failStreak
   next.lastCheckAt = prev.lastCheckAt
   next.lastError = prev.lastError
   next.createdAt = prev.createdAt
@@ -264,7 +286,37 @@ export async function updateSourceRaw(id: string, jsonText: string): Promise<Boo
 export async function markHealth(id: string, health: number, lastError = ''): Promise<void> {
   const s = await getSource(id)
   if (!s) return
-  await dbPut('sources', { ...s, health, lastError, lastCheckAt: Date.now() })
+  await dbPut('sources', {
+    ...s,
+    health,
+    lastError,
+    lastCheckAt: Date.now(),
+    // A successful or merely degraded check proves the site answered; the
+    // failure streak starts over.
+    failStreak: health >= 3 ? (s.failStreak || 0) : 0,
+  })
+}
+
+/** How many consecutive failures it takes before a source is called dead. */
+const DEAD_AFTER_FAILURES = 2
+
+/**
+ * Record a failed request without immediately condemning the source.
+ *
+ * A single timeout, a subway tunnel or a site that rate-limits one request must
+ * not turn a working source into "失效", because 「清除失效」 deletes it for
+ * good. Only the second consecutive failure flips health to 3; being offline
+ * is not evidence about the source at all.
+ */
+export async function noteSourceFailure(id: string, lastError: string): Promise<number> {
+  const s = await getSource(id)
+  if (!s) return 0
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return s.health
+
+  const failStreak = (s.failStreak || 0) + 1
+  const health = failStreak >= DEAD_AFTER_FAILURES ? 3 : s.health
+  await dbPut('sources', { ...s, health, failStreak, lastError, lastCheckAt: Date.now() })
+  return health
 }
 
 /* ---------- 多源搜索 ---------- */
@@ -328,7 +380,7 @@ export async function searchAll(key: string): Promise<SearchOutcome> {
   for (const r of results) {
     if (r.error) {
       failures.push({ sourceId: r.s.id, sourceName: r.s.name, message: r.error })
-      markHealth(r.s.id, 3, r.error).catch(() => undefined)
+      noteSourceFailure(r.s.id, r.error).catch(() => undefined)
     } else if (!r.hits.length) {
       // 任意关键词都可能没有结果，这不算规则失效；体检时才判定健康度。
       failures.push({ sourceId: r.s.id, sourceName: r.s.name, message: '没有搜到结果' })
@@ -461,7 +513,7 @@ export async function ensureChapterText(
     // 规则取空 / 网络失败：让书源在管理页变红，用户能看出该换源了。
     const code = (e as SourceError)?.code
     if (book.sourceId && (code === 'CONTENT_EMPTY' || code === 'RULE_EMPTY' || code === 'NET_HTTP')) {
-      markHealth(book.sourceId, 3, (e as Error).message).catch(() => undefined)
+      noteSourceFailure(book.sourceId, (e as Error).message).catch(() => undefined)
     }
     throw e
   } finally {
@@ -599,7 +651,9 @@ export async function diagnose(source: BookSource, key: string): Promise<Diagnos
     const hits = await withTimeout(search(ctx, key || '小说'), 12000)
     if (!hits.length) {
       steps.push({ key: 'search', label: '搜索', ok: false, detail: '命中 0 条' })
-      return { health: 3, steps }
+      // No results is not proof that the source is dead (the keyword may simply
+      // not exist there), so degrade instead of marking it for deletion.
+      return { health: 2, steps }
     }
     hit = hits.find(h => h.title.includes(key)) || hits[0]
     steps.push({

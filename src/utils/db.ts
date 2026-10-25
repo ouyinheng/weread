@@ -9,7 +9,7 @@
 import { isNativeShell } from '@/utils/native'
 import { createIdbDriver } from '@/utils/storage/idb-driver'
 import { createSqliteDriver } from '@/utils/storage/sqlite-driver'
-import { SQLITE_FLAG, type DBDriver, type StoreKey, type StoreName } from '@/utils/storage/types'
+import { SQLITE_FLAG, type Backend, type DBDriver, type StoreKey, type StoreName } from '@/utils/storage/types'
 
 let driverPromise: Promise<DBDriver> | null = null
 
@@ -45,6 +45,32 @@ export function getDriver(): Promise<DBDriver> {
   return driverPromise
 }
 
+/**
+ * Drop the cached driver so the next call re-runs backend selection.
+ *
+ * The migration calls this the moment the SQLite copy is verified. Without it
+ * the session kept writing to IndexedDB while the flag already said "SQLite":
+ * every book imported or page turned before the next launch would be written to
+ * a store the next launch no longer reads. `close()` first so a fresh SQLite
+ * connection can be created (the plugin refuses a second handle on the same
+ * database name).
+ */
+export async function resetDriver(): Promise<void> {
+  const current = driverPromise
+  driverPromise = null
+  if (!current) return
+  try {
+    await (await current).close()
+  } catch {
+    /* a call still in flight owns it; the replacement reopens on demand */
+  }
+}
+
+/** Which backend this session is actually using. */
+export async function storageBackend(): Promise<Backend> {
+  return (await getDriver()).backend
+}
+
 export async function dbGet<T>(store: StoreName, key: StoreKey): Promise<T | undefined> {
   return (await (await getDriver()).get(store, key)) as T | undefined
 }
@@ -78,6 +104,12 @@ export async function dbPutMany(store: StoreName, rows: any[]): Promise<void> {
 
 export async function dbDelete(store: StoreName, key: StoreKey): Promise<void> {
   await (await getDriver()).delete(store, key)
+}
+
+/** Remove many keys in one shot (bulk cleanup of sources, etc.). */
+export async function dbDeleteMany(store: StoreName, keys: StoreKey[]): Promise<void> {
+  if (!keys.length) return
+  await (await getDriver()).deleteMany(store, keys)
 }
 
 export async function dbDeleteByIndex(store: StoreName, index: string, key: string | number): Promise<void> {

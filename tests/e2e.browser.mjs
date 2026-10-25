@@ -30,7 +30,8 @@ try {
   }))()`)
   check('title is 微读', shell.title === '微读', shell.title)
   check('app mounted', shell.hasApp, '')
-  check('tabbar has 3 tabs', shell.tabbarCount === 3, shell.tabbarCount)
+  check('tabbar has 2 tabs', shell.tabbarCount === 2, shell.tabbarCount)
+  check('tab order is 书架/我', JSON.stringify(shell.tabs) === JSON.stringify(['书架', '我']), JSON.stringify(shell.tabs))
   check('no dead 有声书 tab', !shell.tabs.includes('有声书'), JSON.stringify(shell.tabs))
 
   /* ---------- 2. seed data through the app's own IndexedDB ---------- */
@@ -101,25 +102,33 @@ try {
   check('sort by name reorders', sorted.after[0] === '端到端测试书', JSON.stringify(sorted.after))
   check('sort by progress reorders', sorted.byProgress[0] === '另一本', JSON.stringify(sorted.byProgress))
 
-  /* ---------- 5. search works ---------- */
+  /* ---------- 5. search: shelf pill routes to the dedicated search page ---------- */
+  // 搜索改为独立入口：书架顶部的胶囊只负责跳转 /search，不再原地展开输入框。
   const search = await page.evaluate(`(async () => {
     document.querySelector('.shelf__search').click()
-    await new Promise(r => setTimeout(r, 200))
-    const input = document.querySelector('.shelf__search--active input')
-    if (!input) return { found: false }
-    input.value = '端到端'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
     await new Promise(r => setTimeout(r, 300))
-    const titles = [...document.querySelectorAll('.shelf__item-title')].map(e => e.textContent.trim())
-    const cancel = document.querySelector('.shelf__search-cancel')
-    cancel.click()
-    await new Promise(r => setTimeout(r, 300))
-    const restored = [...document.querySelectorAll('.shelf__item-title')].map(e => e.textContent.trim())
-    return { found: true, filtered: titles, restored }
+    const input = document.querySelector('.search-page input')
+    return {
+      path: location.pathname,
+      inputPresent: !!input,
+      placeholder: input?.getAttribute('placeholder') || '',
+    }
   })()`)
-  check('search input appears', search.found, JSON.stringify(search))
-  check('search filters to one book', search.filtered?.length === 1 && search.filtered[0] === '端到端测试书', JSON.stringify(search.filtered))
-  check('search cancel restores list', search.restored?.length === 2, JSON.stringify(search.restored))
+  check('search pill routes to /search', search.path === '/search', JSON.stringify(search))
+  check('search page has an input', search.inputPresent, JSON.stringify(search))
+  check('search input placeholder', search.placeholder.includes('搜书名'), search.placeholder)
+
+  // 返回书架，书架列表不受影响。
+  const searchBack = await page.evaluate(`(async () => {
+    document.querySelector('.search__back')?.click()
+    await new Promise(r => setTimeout(r, 300))
+    return {
+      path: location.pathname,
+      titles: [...document.querySelectorAll('.shelf__item-title')].map(e => e.textContent.trim()),
+    }
+  })()`)
+  check('search back returns to shelf', searchBack.path === '/shelf', JSON.stringify(searchBack))
+  check('shelf list intact after search round-trip', searchBack.titles.length === 2, JSON.stringify(searchBack.titles))
 
   /* ---------- 6. reader paginates with real layout ---------- */
   await page.goto(`${BASE}/reader/e1`, 1600)
@@ -378,7 +387,7 @@ try {
     return {
       count: row ? row.querySelectorAll('.tp-bg').length : 0,
       active: row ? row.querySelectorAll('.tp-bg.active').length : 0,
-      labelled: row ? [...row.querySelectorAll('.tp-bg')].every(b => !!b.title) : false,
+      labelled: row ? [...row.querySelectorAll('.tp-bg')].every(b => !!b.getAttribute('aria-label')) : false,
       hasThemes: document.querySelectorAll('.tp-theme').length,
       hasBrightness: !!document.querySelector('.tp-row .capsule'),
     }
@@ -402,7 +411,7 @@ try {
     }
   })()`)
   check('no settings gear in reader top bar', !readerChrome.hasGearButton && !readerChrome.hasGearIcon, JSON.stringify(readerChrome))
-  check('reader top bar has book actions', JSON.stringify(readerChrome.entryLabels) === JSON.stringify(['想法','分享','更多']), JSON.stringify(readerChrome.entryLabels))
+  check('reader top bar has book actions', JSON.stringify(readerChrome.entryLabels) === JSON.stringify(['搜索本书', '想法', '分享', '更多']), JSON.stringify(readerChrome.entryLabels))
   check('reader bottom bar matches WeRead', JSON.stringify(readerChrome.bottomLabels) === JSON.stringify(['目录','笔记','进度','亮度','字体']), JSON.stringify(readerChrome.bottomLabels))
 
   /* ---------- 13. screenshots for visual proof ---------- */

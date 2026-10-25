@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { BookSource, SearchHit } from '@/types/source'
+import { isDeadSource } from '@/types/source'
 import type { SearchFailure, DiagnoseResult, ImportResult } from '@/utils/source/sourceService'
 import * as sourceService from '@/utils/source/sourceService'
 
@@ -26,6 +27,8 @@ export const useSourceStore = defineStore('source', () => {
   /** 总开关打开、且至少有一条启用中的书源，发现页才走在线搜索。 */
   const onlineReady = computed(() => networkEnabled.value && sources.value.some(s => s.enabled))
   const enabledSources = computed(() => sources.value.filter(s => s.enabled))
+  /** 体检/搜索判定为失效的源，供「清除失效」一次清掉。 */
+  const deadSources = computed(() => sources.value.filter(isDeadSource))
 
   async function load(force = false): Promise<void> {
     if (loaded.value && !force) return
@@ -52,6 +55,14 @@ export const useSourceStore = defineStore('source', () => {
   async function remove(id: string): Promise<void> {
     await sourceService.deleteSource(id)
     await refresh()
+  }
+
+  /** 删掉所有 health === 3 的书源，返回删掉的条数。 */
+  async function removeDead(): Promise<number> {
+    const ids = deadSources.value.map(s => s.id)
+    const removed = await sourceService.deleteSources(ids)
+    await refresh()
+    return removed
   }
 
   async function toggle(id: string, enabled: boolean): Promise<void> {
@@ -121,7 +132,11 @@ export const useSourceStore = defineStore('source', () => {
     if (!src) throw new Error('书源不存在')
     const result = await sourceService.diagnose(src, key)
     const failed = result.steps.find(s => !s.ok)
-    await sourceService.markHealth(id, result.health, result.health === 1 ? '' : (failed?.detail || ''))
+    if (result.health >= 3) {
+      await sourceService.noteSourceFailure(id, failed?.detail || '体检失败')
+    } else {
+      await sourceService.markHealth(id, result.health, result.health === 1 ? '' : (failed?.detail || ''))
+    }
     await refresh()
     return result
   }
@@ -153,9 +168,14 @@ export const useSourceStore = defineStore('source', () => {
         try {
           const r = await sourceService.diagnose(s, key)
           const failed = r.steps.find(x => !x.ok)
-          await sourceService.markHealth(s.id, r.health, r.health === 1 ? '' : (failed?.detail || '')).catch(() => undefined)
+          if (r.health >= 3) {
+            await sourceService.noteSourceFailure(s.id, failed?.detail || '体检失败').catch(() => undefined)
+          } else {
+            await sourceService.markHealth(s.id, r.health, r.health === 1 ? '' : (failed?.detail || '')).catch(() => undefined)
+          }
         } catch (e) {
-          await sourceService.markHealth(s.id, 3, (e as Error)?.message || '体检失败').catch(() => undefined)
+          // A crashed check is a failed request, not proof that the source is dead.
+          await sourceService.noteSourceFailure(s.id, (e as Error)?.message || '体检失败').catch(() => undefined)
         }
         checkProgress.value = { ...checkProgress.value, done: checkProgress.value.done + 1 }
       }
@@ -186,11 +206,13 @@ export const useSourceStore = defineStore('source', () => {
     checkProgress,
     onlineReady,
     enabledSources,
+    deadSources,
     load,
     refresh,
     setNetworkEnabled,
     importText,
     remove,
+    removeDead,
     toggle,
     saveRaw,
     searchOnline,

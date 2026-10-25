@@ -25,10 +25,10 @@ const page = await newPage(`${BASE}/shelf`)
 
 try {
   await page.goto(`${BASE}/shelf`, 1400)
-  // Warm 发现 once so the measurements below are of a cached switch, not of a
+  // Warm 我 once so the measurements below are of a cached switch, not of a
   // first-time chunk fetch (that case is covered separately by the preload test).
   await page.evaluate(`(async () => {
-    const t = [...document.querySelectorAll('.tabbar__item')].find(x => x.textContent.trim() === '发现')
+    const t = [...document.querySelectorAll('.tabbar__item')].find(x => x.textContent.trim() === '我')
     t.click(); await new Promise(r => setTimeout(r, 400))
     const s = [...document.querySelectorAll('.tabbar__item')].find(x => x.textContent.trim() === '书架')
     s.click(); await new Promise(r => setTimeout(r, 400))

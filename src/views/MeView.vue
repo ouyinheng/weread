@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBookStore, useBookmarkStore } from '@/stores'
 import { useSourceStore } from '@/stores/source'
 import type { Highlight } from '@/types'
 import { getAllReadingTime, formatDuration, getDailyReading, readingStreak } from '@/utils/reading-time'
-import { dbGetAll } from '@/utils/db'
+import { dbGetAll, storageBackend } from '@/utils/db'
+import type { Backend } from '@/utils/storage/types'
 import { storageIssues } from '@/utils/storage-errors'
 import { migrationState } from '@/utils/storage/migrate'
 import type { IconName } from '@/components/icon-names'
@@ -24,6 +25,25 @@ const storageRatio = ref(0)
 const noteCount = ref(0)
 const daily = ref<{ date: string; ms: number }[]>([])
 const streak = ref(0)
+/** Live backend for this session — the proof that the SQLite switch took. */
+const backend = ref<Backend | null>(null)
+
+async function refreshBackend(): Promise<void> {
+  try {
+    backend.value = await storageBackend()
+  } catch {
+    backend.value = null
+  }
+}
+
+// The migration swaps the driver mid-session; re-read so the row is not stale.
+watch(() => migrationState.completed, () => { void refreshBackend() })
+
+const backendText = computed(() => {
+  if (backend.value === 'sqlite') return 'SQLite'
+  if (backend.value === 'indexeddb') return 'IndexedDB'
+  return '—'
+})
 
 const dailyMax = computed(() => Math.max(1, ...daily.value.map(d => d.ms)))
 const weekTotal = computed(() => daily.value.slice(-7).reduce((sum, d) => sum + d.ms, 0))
@@ -124,6 +144,7 @@ onMounted(async () => {
   totalMs.value = await getAllReadingTime()
   daily.value = await getDailyReading(30)
   streak.value = readingStreak(daily.value)
+  await refreshBackend()
   await measureStorage()
 })
 </script>
@@ -204,6 +225,12 @@ onMounted(async () => {
             {{ storageText }}<template v-if="quotaText"> / {{ quotaText }}</template>
           </span>
         </div>
+        <div class="me__row">
+          <span class="me__row-label">存储引擎</span>
+          <span class="me__row-value" :class="{ 'me__row-value--accent': backend === 'sqlite' }">
+            {{ backendText }}
+          </span>
+        </div>
         <button class="me__row me__row--link" @click="router.push({ name: 'sourceList' })">
           <span class="me__row-label">书源管理</span>
           <span class="me__row-value">{{ sourceStore.sources.length }} 个</span>
@@ -224,7 +251,7 @@ onMounted(async () => {
             {{ migrationState.error
               ? `未完成：${migrationState.error}`
               : migrationState.completed
-                ? '已完成，下次启动生效'
+                ? '已完成'
                 : `迁移中 ${migrationState.done}/${migrationState.total}` }}
           </span>
         </div>

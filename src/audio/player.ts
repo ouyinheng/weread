@@ -7,6 +7,10 @@
  * Android's engine allows — there is no pause, so pausing means stopping and
  * remembering which sentence was speaking.
  *
+ * Engines that queue utterances are given one sentence ahead: the next one is
+ * already synthesising while the current one plays, which removes the silent
+ * gap between sentences. One-shot engines stay strictly sequential.
+ *
  * A monotonically increasing `token` guards every await: pause / skip / exit
  * bump it, so a sentence that was in flight when the user acted cannot advance
  * the index afterwards.
@@ -92,19 +96,41 @@ export function useListenPlayer(deps: PlayerDeps) {
     const my = ++token
     await e.stop()
 
+    const voice = deps.settings().voice || undefined
+    /*
+     * The phone's own engine queues `QUEUE_ADD`, and the web engine queues on
+     * its own; both let us prepare the next sentence while the current one is
+     * still playing. Edge is one-shot, so it stays sequential.
+     */
+    const lookahead = e.canLookahead?.(voice) === true
+    const queued = new Map<number, Promise<void>>()
+
+    const enqueue = (i: number) => {
+      if (i < 0 || queued.has(i)) return
+      const now = deps.sentences()
+      if (i >= now.length) return
+      const p = e.speak(now[i].text, deps.settings().rate, deps.settings().voice || undefined)
+      // A lookahead promise can fail while the previous sentence still plays.
+      // Mark it handled here; the loop surfaces the error when the sentence is due.
+      p.catch(() => {})
+      queued.set(i, p)
+    }
+
     index.value = clamp(from, 0, list.length - 1)
     status.value = 'playing'
 
     while (my === token) {
       // Re-read per iteration: the chapter may have been swapped underneath.
       const current = deps.sentences()
-      if (index.value >= current.length) break
-      const sentence = current[index.value]
+      const at = index.value
+      if (at >= current.length) break
 
-      deps.onSentence?.(sentence, index.value)
+      deps.onSentence?.(current[at], at)
+      enqueue(at)
+      if (lookahead) enqueue(at + 1)
 
       try {
-        await e.speak(sentence.text, deps.settings().rate, deps.settings().voice || undefined)
+        await queued.get(at)
       } catch (err) {
         if (my !== token) return
         // Cancellation is the user's own doing (pause / skip / exit).
@@ -114,11 +140,15 @@ export function useListenPlayer(deps: PlayerDeps) {
           ? 'online-failed'
           : 'engine-init-failed'
         status.value = 'unavailable'
+        // Silence the sentence that was queued ahead, if any.
+        void e.stop()
         return
+      } finally {
+        queued.delete(at)
       }
 
       if (my !== token) return
-      index.value++
+      index.value = at + 1
     }
 
     if (my !== token) return

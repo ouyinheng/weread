@@ -1,12 +1,19 @@
 /**
  * One-time IndexedDB → SQLite migration.
  *
- * Runs in the background while the app keeps reading from IndexedDB, and only
- * flips the switch for the *next* session. That ordering is deliberate: a
- * failed migration must never be able to take the working library down with it.
+ * Runs in the background while the app keeps reading from IndexedDB. The switch
+ * itself happens as soon as the copy is verified: the driver is replaced with
+ * the SQLite one in the same session, so nothing written afterwards can land in
+ * the store that is about to be abandoned. (An earlier version deferred the
+ * switch to the next launch — everything imported or read in between was
+ * written to IndexedDB and then silently lost.)
+ *
+ * A failed migration still never touches the live library: the flag is only set
+ * after the row counts match, and the working IndexedDB backend stays in place.
  */
 import { reactive } from 'vue'
 import { isNativeShell } from '@/utils/native'
+import { resetDriver } from '@/utils/db'
 import { createIdbDriver } from './idb-driver'
 import { createSqliteDriver } from './sqlite-driver'
 import { copyLibrary } from './copy'
@@ -18,7 +25,7 @@ export interface MigrationProgress {
   total: number
   message: string
   error: string
-  /** Completed in this session; takes effect on the next launch. */
+  /** Copy verified and this session already switched to SQLite. */
   completed: boolean
 }
 
@@ -41,12 +48,16 @@ export async function migrateToSqliteInBackground(): Promise<void> {
   if (migrationState.busy || migrationState.completed) return
 
   const target = createSqliteDriver()
+  /** Set once the SQLite copy is trustworthy; drives the in-session switch. */
+  let switchNow = false
   try {
     await target.open()
     // A previous run may have finished even if localStorage lost the flag.
     if (await target.isMigrated()) {
       localStorage.setItem(SQLITE_FLAG, '1')
       migrationState.completed = true
+      migrationState.message = '数据已在 SQLite 中'
+      switchNow = true
       return
     }
 
@@ -73,8 +84,9 @@ export async function migrateToSqliteInBackground(): Promise<void> {
     await target.markMigrated()
     localStorage.setItem(SQLITE_FLAG, '1')
     migrationState.completed = true
-    migrationState.message = `已迁移 ${result.books} 本书、${result.chapters} 章，下次启动生效`
+    migrationState.message = `已迁移 ${result.books} 本书、${result.chapters} 章`
     await source.close()
+    switchNow = true
   } catch (e) {
     // Keep the working IndexedDB backend; the next launch tries again.
     migrationState.error = (e as Error)?.message || '迁移失败'
@@ -83,8 +95,14 @@ export async function migrateToSqliteInBackground(): Promise<void> {
     migrationState.busy = false
     migrationState.done = 0
     migrationState.total = 0
-    // This session still uses IndexedDB; release the SQLite handle until the
-    // next launch picks it up.
+    // Close the migration's own handle before replacing the live driver: the
+    // plugin will not hand out a second connection for the same database name.
     await target.close().catch(() => undefined)
+    /*
+     * Hand the session over to SQLite now. The in-memory stores were read from
+     * IndexedDB, but the copy just verified every row and reconciled anything
+     * that changed mid-run, so both sides agree and no reload is needed.
+     */
+    if (switchNow) await resetDriver()
   }
 }

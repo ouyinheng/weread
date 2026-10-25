@@ -35,6 +35,11 @@ export interface BookSource {
   /** 原始 legado JSON，整包留着，规则升级 / 回滚不用重新导入 */
   raw: Record<string, any>
   health: number
+  /**
+   * 连续失败次数。单次超时 / 断网只记一次，连续两次才判 health 3，
+   * 避免一次网络抖动就把整批书源清掉。成功请求后归零。
+   */
+  failStreak?: number
   lastCheckAt: number
   lastError: string
   createdAt: number
@@ -101,4 +106,15 @@ export class SourceError extends Error {
 /** 在线书的唯一判据：有条来源书源。不要用 format 判断。 */
 export function isOnlineBook(book: { sourceId?: string }): boolean {
   return !!book.sourceId
+}
+
+/**
+ * 什么算「失效」。
+ *
+ * 只有 health === 3 才算：那是连续两次请求失败、确实连不上的源。降级（2）
+ * 还能搜到书、只是读不到正文，未检测（0）根本没有结论 —— 把这两种一起清掉，
+ * 用户下次要用就没得选了。
+ */
+export function isDeadSource(source: { health: number }): boolean {
+  return source.health === 3
 }

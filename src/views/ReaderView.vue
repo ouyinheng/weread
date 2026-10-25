@@ -903,8 +903,8 @@ async function jumpToSearchHit(hit: BookSearchHit): Promise<void> {
  * page-turn would.
  */
 const bodyText = ref('')
-/** 全屏听书页 or 底部迷你条。 */
-const listenExpanded = ref(true)
+/** 全屏听书页 or 底部迷你条。初始未在听书，底栏依赖 !listenExpanded 才能出现。 */
+const listenExpanded = ref(false)
 /** 定时关闭剩余秒数；0 表示没开。 */
 const listenTimerLeft = ref(0)
 let listenTimerId: ReturnType<typeof setInterval> | null = null
@@ -964,6 +964,11 @@ function syncMediaSession(): void {
     if (!listenActive.value) {
       ms.metadata = null
       ms.playbackState = 'none'
+      // Release the handlers too, otherwise a stale lock-screen play button
+      // could start a new session after the user has left 听书.
+      for (const name of ['play', 'pause', 'previoustrack', 'nexttrack']) {
+        try { ms.setActionHandler(name, null) } catch { /* unsupported */ }
+      }
       return
     }
     const Meta = (window as unknown as { MediaMetadata?: any }).MediaMetadata
@@ -1126,6 +1131,10 @@ async function startListening() {
   await nextTick()
   prepareListenText()
   if (!listenSentences.value.length) {
+    // Nothing to speak: undo the expanded state, or the toolbar stays hidden
+    // behind a listen screen that never appears.
+    listenExpanded.value = false
+    showMenu.value = true
     window.alert('本章没有可朗读的文字')
     return
   }
@@ -1137,7 +1146,10 @@ async function startListening() {
 function closeListening() {
   void listen.stop()
   sentenceRects.value = []
-  listenExpanded.value = true
+  // 退出听书后回到正文：收起听书页，并像 collapseListening 一样还原菜单，
+  // 否则底部工具栏会一直缺席。
+  listenExpanded.value = false
+  showMenu.value = true
   clearListenTimer()
 }
 

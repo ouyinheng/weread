@@ -64,13 +64,13 @@ export async function getDailyReading(days = 30): Promise<{ date: string; ms: nu
   return out
 }
 
-/** Consecutive days with reading, counting back from today. */
+/** Consecutive days with reading. Today counts once it has time; a still-empty
+ *  today does not break a streak that is alive through yesterday. */
 export function readingStreak(list: { date: string; ms: number }[]): number {
+  let i = list.length - 1
+  if (i >= 0 && list[i].ms <= 0) i--
   let streak = 0
-  for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].ms > 0) streak++
-    else break
-  }
+  for (; i >= 0 && list[i].ms > 0; i--) streak++
   return streak
 }
 

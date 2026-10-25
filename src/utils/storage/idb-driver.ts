@@ -155,6 +155,28 @@ export function createIdbDriver(dbName = DEFAULT_DB): DBDriver {
     })
   }
 
+  /**
+   * One transaction for the whole list: deleting a few thousand sources one
+   * `del()` at a time means a few thousand transactions and a frozen UI.
+   * Composite keys (chapters) are not valid IDB keys, so those fall back.
+   */
+  async function deleteMany(store: StoreName, keys: StoreKey[]): Promise<void> {
+    if (!keys.length) return
+    if (keys.some(k => Array.isArray(k))) {
+      for (const k of keys) await del(store, k)
+      return
+    }
+    await open()
+    return new Promise((resolve, reject) => {
+      const t = db!.transaction(store, 'readwrite')
+      const s = t.objectStore(store)
+      for (const k of keys) s.delete(k as IDBValidKey)
+      t.oncomplete = () => resolve()
+      t.onerror = () => reject(t.error)
+      t.onabort = () => reject(t.error)
+    })
+  }
+
   async function deleteByIndex(store: StoreName, index: string, key: string | number): Promise<void> {
     await open()
     const t = db!.transaction(store, 'readwrite')
@@ -185,5 +207,8 @@ export function createIdbDriver(dbName = DEFAULT_DB): DBDriver {
     db = null
   }
 
-  return { open, get, getAll, getAllByIndex, count, put, putRaw, putMany, delete: del, deleteByIndex, clear, close }
+  return {
+    backend: 'indexeddb',
+    open, get, getAll, getAllByIndex, count, put, putRaw, putMany, delete: del, deleteMany, deleteByIndex, clear, close,
+  }
 }

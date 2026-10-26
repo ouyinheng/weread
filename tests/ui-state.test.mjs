@@ -50,8 +50,9 @@ setActivePinia(createPinia())
 const store = useAppSettingsStore()
 check('default scale', store.app.fontScale === 1, store.app.fontScale)
 check('default theme follows system', store.app.theme === 'system', store.app.theme)
+check('default hides tv tab', store.app.showTvTab === false, store.app.showTvTab)
 
-await store.update({ fontScale: 1.2, fontFamily: 'serif', theme: 'dark' })
+await store.update({ fontScale: 1.2, fontFamily: 'serif', theme: 'dark', showTvTab: true })
 check('update applies to state', store.app.fontScale === 1.2, store.app.fontScale)
 
 const saved = await new Promise((res, rej) => {
@@ -65,7 +66,10 @@ const saved = await new Promise((res, rej) => {
 })
 check(
   'settings persisted',
-  saved?.fontScale === 1.2 && saved?.fontFamily === 'serif' && saved?.theme === 'dark',
+  saved?.fontScale === 1.2 &&
+    saved?.fontFamily === 'serif' &&
+    saved?.theme === 'dark' &&
+    saved?.showTvTab === true,
   JSON.stringify(saved)
 )
 
@@ -75,7 +79,7 @@ const store2 = useAppSettingsStore()
 await store2.load()
 check(
   'settings reload',
-  store2.app.fontScale === 1.2 && store2.app.theme === 'dark',
+  store2.app.fontScale === 1.2 && store2.app.theme === 'dark' && store2.app.showTvTab === true,
   JSON.stringify(store2.app)
 )
 

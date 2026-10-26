@@ -11,19 +11,23 @@
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { TABS } from '@/router/tabs'
+import { visibleTabs } from '@/router/tabs'
+import { useAppSettingsStore } from '@/stores'
 import Icon from '@/components/Icon.vue'
 import type { IconName } from '@/components/icon-names'
 import { tapFeedback } from '@/utils/native'
 
 const TAB_ICONS: Record<string, IconName> = {
   shelf: 'tab-shelf',
+  tv: 'tab-tv',
   me: 'tab-me',
 }
 
 const route = useRoute()
 const router = useRouter()
+const appSettings = useAppSettingsStore()
 
+const tabs = computed(() => visibleTabs(appSettings.app.showTvTab))
 const activeName = computed(() => String(route.name || ''))
 
 function isActive(name: string): boolean {
@@ -45,7 +49,7 @@ function go(name: string) {
 <template>
   <nav class="tabbar" role="tablist">
     <button
-      v-for="tab in TABS"
+      v-for="tab in tabs"
       :key="tab.name"
       class="tabbar__item"
       :class="{ 'tabbar__item--active': isActive(tab.name) }"

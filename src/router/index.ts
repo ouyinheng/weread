@@ -4,8 +4,8 @@ import { isTabRoute, tabIndex } from './tabs'
 /** Depth used to decide push vs. pop direction. */
 export function routeDepth(name: unknown): number {
   const n = String(name || '')
-  if (n === 'reader' || n === 'sourceDetail') return 3
-  if (n === 'catalog' || n === 'settings' || n === 'sourceList' || n === 'search') return 2
+  if (n === 'reader' || n === 'sourceDetail' || n === 'tvDetail' || n === 'tvPlay') return 3
+  if (n === 'catalog' || n === 'settings' || n === 'sourceList' || n === 'search' || n === 'tvSearch' || n === 'tvSources') return 2
   if (n === 'fontSettings') return 3
   return 1
 }
@@ -13,6 +13,11 @@ export function routeDepth(name: unknown): number {
 const routes = [
   { path: '/', redirect: '/shelf' },
   { path: '/shelf', name: 'shelf', component: () => import('@/views/ShelfView.vue'), meta: { tab: 'shelf' } },
+  { path: '/tv', name: 'tv', component: () => import('@/views/tv/TvHomeView.vue'), meta: { tab: 'tv' } },
+  { path: '/tv/search', name: 'tvSearch', component: () => import('@/views/tv/TvSearchView.vue') },
+  { path: '/tv/detail', name: 'tvDetail', component: () => import('@/views/tv/TvDetailView.vue') },
+  { path: '/tv/play', name: 'tvPlay', component: () => import('@/views/tv/TvPlayerView.vue') },
+  { path: '/tv/sources', name: 'tvSources', component: () => import('@/views/tv/TvSourcesView.vue') },
   { path: '/search', name: 'search', component: () => import('@/views/SearchView.vue') },
   // 发现页暂时下线，旧链接统一落到搜索页。
   { path: '/discover', redirect: '/search' },

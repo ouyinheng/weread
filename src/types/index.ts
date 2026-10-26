@@ -87,6 +87,8 @@ export interface AppSettings {
   fontFamily: string
   /** Whole-app colour scheme; the reader's own theme stays independent. */
   theme: AppTheme
+  /** Show the 影视 tab in the bottom bar. Off by default; sources keep working either way. */
+  showTvTab: boolean
 }
 
 export type AppTheme = 'system' | 'light' | 'dark'

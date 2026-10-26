@@ -325,6 +325,25 @@ function about() {
         </div>
       </div>
 
+      <!-- 功能入口：影视是可选模块，默认不占底栏，需要时再打开。 -->
+      <div class="settings-group">
+        <div class="settings-row settings-row--toggle">
+          <span class="settings-label">显示影视入口</span>
+          <button
+            class="toggle"
+            :class="{ on: app.showTvTab }"
+            role="switch"
+            :aria-checked="app.showTvTab"
+            @click="appSettings.update({ showTvTab: !app.showTvTab })"
+          >
+            <span class="toggle__dot" />
+          </button>
+        </div>
+      </div>
+      <p class="settings-hint">
+        开启后底部导航显示「影视」。关闭只会隐藏入口，已添加的视频源和观看记录都会保留，仍可从「我 → 视频源管理」进入。
+      </p>
+
       <!-- 网络书源：默认关闭，首次开启时说明会联网 -->
       <div class="settings-group">
         <div class="settings-row settings-row--toggle">

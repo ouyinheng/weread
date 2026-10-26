@@ -102,6 +102,8 @@ export const useAppSettingsStore = defineStore('appSettings', () => {
     fontScale: 1,
     fontFamily: 'system',
     theme: 'system',
+    // 影视是可选模块：默认不占底栏，用户在系统设置里主动开启后才出现。
+    showTvTab: false,
   })
 
   const loaded = ref(false)
@@ -118,6 +120,7 @@ export const useAppSettingsStore = defineStore('appSettings', () => {
         // 旧记录只有布尔开关：关掉跟随系统时相当于固定浅色。
         app.value.theme = 'light'
       }
+      if (typeof saved.showTvTab === 'boolean') app.value.showTvTab = saved.showTvTab
     }
     loaded.value = true
     apply()

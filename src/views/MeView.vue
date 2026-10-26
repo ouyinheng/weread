@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBookStore, useBookmarkStore } from '@/stores'
 import { useSourceStore } from '@/stores/source'
+import { useTvStore } from '@/stores/tv'
 import type { Highlight } from '@/types'
-import { getAllReadingTime, formatDuration, getDailyReading, readingStreak } from '@/utils/reading-time'
-import { dbGetAll, storageBackend } from '@/utils/db'
-import type { Backend } from '@/utils/storage/types'
+import { getAllReadingTime, formatDuration } from '@/utils/reading-time'
+import { dbGetAll } from '@/utils/db'
 import { storageIssues } from '@/utils/storage-errors'
 import { migrationState } from '@/utils/storage/migrate'
 import type { IconName } from '@/components/icon-names'
@@ -16,6 +16,7 @@ const router = useRouter()
 const bookStore = useBookStore()
 const bookmarkStore = useBookmarkStore()
 const sourceStore = useSourceStore()
+const tvStore = useTvStore()
 
 const totalMs = ref(0)
 const storageText = ref('—')
@@ -23,39 +24,6 @@ const quotaText = ref('')
 /** Usage / quota, 0 when the platform does not report a quota. */
 const storageRatio = ref(0)
 const noteCount = ref(0)
-const daily = ref<{ date: string; ms: number }[]>([])
-const streak = ref(0)
-/** Live backend for this session — the proof that the SQLite switch took. */
-const backend = ref<Backend | null>(null)
-
-async function refreshBackend(): Promise<void> {
-  try {
-    backend.value = await storageBackend()
-  } catch {
-    backend.value = null
-  }
-}
-
-// The migration swaps the driver mid-session; re-read so the row is not stale.
-watch(() => migrationState.completed, () => { void refreshBackend() })
-
-const backendText = computed(() => {
-  if (backend.value === 'sqlite') return 'SQLite'
-  if (backend.value === 'indexeddb') return 'IndexedDB'
-  return '—'
-})
-
-const dailyMax = computed(() => Math.max(1, ...daily.value.map(d => d.ms)))
-const weekTotal = computed(() => daily.value.slice(-7).reduce((sum, d) => sum + d.ms, 0))
-
-function barPct(ms: number): number {
-  if (ms <= 0) return 0
-  return Math.max(4, Math.round(ms / dailyMax.value * 100))
-}
-
-function dayTitle(d: { date: string; ms: number }): string {
-  return `${d.date} · ${d.ms > 0 ? formatDuration(d.ms) : '未阅读'}`
-}
 
 const reading = computed(() => bookStore.books.filter(b => !b.finished && b.progress > 0).length)
 const finished = computed(() => bookStore.books.filter(b => b.finished).length)
@@ -121,10 +89,21 @@ async function measureStorage() {
       }
       return
     }
-  } catch { /* not supported */ }
+  } catch {
+    /* not supported */
+  }
 
   try {
-    const stores = ['books', 'chapters', 'files', 'bookmarks', 'highlights', 'sessions', 'sources', 'daily'] as const
+    const stores = [
+      'books',
+      'chapters',
+      'files',
+      'bookmarks',
+      'highlights',
+      'sessions',
+      'sources',
+      'daily',
+    ] as const
     let total = 0
     for (const name of stores) {
       const rows = await dbGetAll(name)
@@ -140,11 +119,9 @@ onMounted(async () => {
   await bookStore.loadBooks()
   await bookmarkStore.loadAll()
   await sourceStore.load()
+  await tvStore.load()
   noteCount.value = (await dbGetAll<Highlight>('highlights')).length
   totalMs.value = await getAllReadingTime()
-  daily.value = await getDailyReading(30)
-  streak.value = readingStreak(daily.value)
-  await refreshBackend()
   await measureStorage()
 })
 </script>
@@ -174,41 +151,20 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 近 30 天阅读：数据来自每天的 daily 桶，不依赖每次会话的明细。 -->
-      <div class="me__card me__chart">
-        <div class="me__chart-head">
-          <span class="me__chart-title">近 30 天阅读</span>
-          <span class="me__chart-sub">
-            {{ streak > 0 ? `连续 ${streak} 天` : `本周 ${weekTotal > 0 ? formatDuration(weekTotal) : '未阅读'}` }}
-          </span>
-        </div>
-        <div class="me__bars">
-          <div
-            v-for="d in daily"
-            :key="d.date"
-            class="me__bar-col"
-            :title="dayTitle(d)"
-          >
-            <div
-              class="me__bar"
-              :class="{ 'me__bar--on': d.ms > 0 }"
-              :style="{ height: barPct(d.ms) + '%' }"
-            />
-          </div>
-        </div>
-        <div class="me__chart-foot">
-          <span>30 天前</span>
-          <span>本周 {{ weekTotal > 0 ? formatDuration(weekTotal) : '未阅读' }}</span>
-          <span>今天</span>
-        </div>
-      </div>
+      <!-- 近 30 天阅读与存储引擎不在「我的」展示：数据仍在本地记录，只是不占首页。 -->
 
       <div class="me__card me__rows">
-        <button class="me__row me__row--link" @click="router.push({ name: 'settings', query: { tab: 'reading' } })">
+        <button
+          class="me__row me__row--link"
+          @click="router.push({ name: 'settings', query: { tab: 'reading' } })"
+        >
           <span class="me__row-label">阅读设置</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
-        <button class="me__row me__row--link" @click="router.push({ name: 'settings', query: { tab: 'system' } })">
+        <button
+          class="me__row me__row--link"
+          @click="router.push({ name: 'settings', query: { tab: 'system' } })"
+        >
           <span class="me__row-label">系统设置</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
@@ -217,7 +173,9 @@ onMounted(async () => {
       <div class="me__card me__rows">
         <div class="me__row">
           <span class="me__row-label">累计阅读</span>
-          <span class="me__row-value" :class="{ 'me__row-value--accent': totalMs > 0 }">{{ durationText }}</span>
+          <span class="me__row-value" :class="{ 'me__row-value--accent': totalMs > 0 }">{{
+            durationText
+          }}</span>
         </div>
         <div class="me__row">
           <span class="me__row-label">本地占用</span>
@@ -225,15 +183,14 @@ onMounted(async () => {
             {{ storageText }}<template v-if="quotaText"> / {{ quotaText }}</template>
           </span>
         </div>
-        <div class="me__row">
-          <span class="me__row-label">存储引擎</span>
-          <span class="me__row-value" :class="{ 'me__row-value--accent': backend === 'sqlite' }">
-            {{ backendText }}
-          </span>
-        </div>
         <button class="me__row me__row--link" @click="router.push({ name: 'sourceList' })">
           <span class="me__row-label">书源管理</span>
           <span class="me__row-value">{{ sourceStore.sources.length }} 个</span>
+          <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
+        </button>
+        <button class="me__row me__row--link" @click="router.push({ name: 'tvSources' })">
+          <span class="me__row-label">视频源管理</span>
+          <span class="me__row-value">{{ tvStore.sources.length }} 个</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
       </div>
@@ -244,28 +201,30 @@ onMounted(async () => {
       >
         <div class="me__row">
           <span class="me__row-label">存储迁移</span>
-          <span
-            class="me__row-value"
-            :class="{ 'me__row-value--accent': migrationState.completed }"
-          >
-            {{ migrationState.error
-              ? `未完成：${migrationState.error}`
-              : migrationState.completed
-                ? '已完成'
-                : `迁移中 ${migrationState.done}/${migrationState.total}` }}
+          <span class="me__row-value" :class="{ 'me__row-value--accent': migrationState.completed }">
+            {{
+              migrationState.error
+                ? `未完成：${migrationState.error}`
+                : migrationState.completed
+                  ? '已完成'
+                  : `迁移中 ${migrationState.done}/${migrationState.total}`
+            }}
           </span>
         </div>
       </div>
 
       <p v-if="storageRatio >= 0.8" class="me__warn">
-        存储空间已用 {{ Math.round(storageRatio * 100) }}%。空间紧张时系统可能回收本地数据，建议先备份，再清理缓存或删除已读完的书。
+        存储空间已用
+        {{
+          Math.round(storageRatio * 100)
+        }}%。空间紧张时系统可能回收本地数据，建议先备份，再清理缓存或删除已读完的书。
       </p>
 
       <p v-if="storageIssues.length" class="me__warn">
         {{ storageIssues[0].message }}（本次运行中还有 {{ storageIssues.length }} 项存储问题，详见控制台）
       </p>
 
-      <p class="me__note">数据仅保存在本机浏览器存储中，不上传任何服务器。</p>
+      <p class="me__note">数据仅保存在本机存储中，不上传任何服务器。</p>
     </main>
   </div>
 </template>
@@ -379,64 +338,7 @@ onMounted(async () => {
   text-overflow: ellipsis;
 }
 
-/* 30-day reading chart: one bar per day, zero days keep a faint baseline. */
-.me__chart {
-  padding: 14px 14px 10px;
-}
-
-.me__chart-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.me__chart-title {
-  font-size: calc(14px * var(--app-font-scale));
-  font-weight: 600;
-  color: var(--text);
-}
-
-.me__chart-sub {
-  font-size: calc(11px * var(--app-font-scale));
-  color: var(--text-secondary);
-}
-
-.me__bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 88px;
-}
-
-.me__bar-col {
-  flex: 1;
-  height: 100%;
-  display: flex;
-  align-items: flex-end;
-  border-radius: 2px;
-  background: rgba(120, 120, 128, 0.06);
-}
-
-.me__bar {
-  width: 100%;
-  border-radius: 2px;
-  background: var(--accent);
-  opacity: 0;
-  transition: height var(--dur-page) var(--ease-standard);
-}
-
-.me__bar--on {
-  opacity: 0.85;
-}
-
-.me__chart-foot {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 8px;
-  font-size: calc(10.5px * var(--app-font-scale));
-  color: var(--text-secondary);
-}
+/* 30-day reading chart removed from this page; its styles went with it. */
 
 .me__rows {
   padding: 0 14px;
@@ -475,11 +377,17 @@ onMounted(async () => {
 }
 
 .me__row-label {
+  /* Takes the free space so the value (e.g. 书源个数) sits next to the chevron
+     on the right, not floating in the middle of the row. */
+  flex: 1;
+  min-width: 0;
   font-size: calc(15px * var(--app-font-scale));
   color: var(--text);
 }
 
 .me__row-value {
+  flex-shrink: 0;
+  text-align: right;
   font-size: calc(14px * var(--app-font-scale));
   color: var(--text-secondary);
 }

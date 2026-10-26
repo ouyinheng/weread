@@ -43,4 +43,5 @@ export type IconName =
   | 'tab-read'
   | 'tab-shelf'
   | 'tab-audio'
+  | 'tab-tv'
   | 'tab-me'

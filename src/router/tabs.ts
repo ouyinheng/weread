@@ -16,10 +16,22 @@ export interface TabDef {
  */
 export const TABS: TabDef[] = [
   { name: 'shelf', path: '/shelf', label: '书架' },
+  { name: 'tv', path: '/tv', label: '影视' },
   { name: 'me', path: '/me', label: '我' },
 ]
 
 export const TAB_NAMES = new Set(TABS.map(t => t.name))
+
+/**
+ * Tabs actually shown in the bottom bar.
+ *
+ * 影视 is opt-in: most readers only read, and a permanent third slot for a
+ * module they never opened is noise. Turning it on in 系统设置 adds the tab;
+ * turning it off only hides the entrance — sources and watch history stay.
+ */
+export function visibleTabs(showTvTab: boolean): TabDef[] {
+  return TABS.filter(tab => tab.name !== 'tv' || showTvTab)
+}
 
 export function isTabRoute(name: unknown): boolean {
   return typeof name === 'string' && TAB_NAMES.has(name)

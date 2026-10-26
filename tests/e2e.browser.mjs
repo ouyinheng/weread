@@ -30,8 +30,9 @@ try {
   }))()`)
   check('title is 微读', shell.title === '微读', shell.title)
   check('app mounted', shell.hasApp, '')
-  check('tabbar has 2 tabs', shell.tabbarCount === 2, shell.tabbarCount)
+  check('tabbar has 2 tabs by default', shell.tabbarCount === 2, shell.tabbarCount)
   check('tab order is 书架/我', JSON.stringify(shell.tabs) === JSON.stringify(['书架', '我']), JSON.stringify(shell.tabs))
+  check('影视 hidden until enabled', !shell.tabs.includes('影视'), JSON.stringify(shell.tabs))
   check('no dead 有声书 tab', !shell.tabs.includes('有声书'), JSON.stringify(shell.tabs))
 
   /* ---------- 2. seed data through the app's own IndexedDB ---------- */

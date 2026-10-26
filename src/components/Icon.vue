@@ -180,6 +180,12 @@ withDefaults(
       <!-- Lower book: mirrored, so the pair reads as a stack seen from the side. -->
       <path d="M6.9 13.5h10.8a4.2 4.2 0 010 8.4H6.9a4.2 4.2 0 000-8.4z" fill="currentColor" stroke="none" />
     </template>
+    <template v-else-if="name === 'tab-tv'">
+      <!-- Screen with a play cut-out; the knock-out uses the bar colour so the
+           glyph reads on both the white and black tab bars. -->
+      <path d="M4.6 4.4h14.8a2.2 2.2 0 012.2 2.2v10.8a2.2 2.2 0 01-2.2 2.2H4.6a2.2 2.2 0 01-2.2-2.2V6.6a2.2 2.2 0 012.2-2.2z" fill="currentColor" stroke="none" />
+      <path d="M10.2 8.6l5.1 3.4-5.1 3.4z" fill="var(--bottom-bar-bg)" stroke="none" />
+    </template>
     <template v-else-if="name === 'tab-audio'">
       <circle cx="12" cy="12" r="8.4" />
       <path d="M10.4 8.9l5 3.1-5 3.1z" fill="currentColor" stroke="none" />

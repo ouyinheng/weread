@@ -34,11 +34,14 @@ const appSettings = useAppSettingsStore()
  */
 const showsTabBar = computed(() => isTabRoute(route.name) && !uiState.hideTabBar)
 
+/** The video player is a full-bleed black stage, like the reader is a paper one. */
+const isTvPlayer = computed(() => String(route.name || '') === 'tvPlay')
+
 /** Pages that draw their own full-bleed background instead of the app canvas. */
-const isFullBleed = computed(() => String(route.name || '') === 'reader')
+const isFullBleed = computed(() => String(route.name || '') === 'reader' || isTvPlayer.value)
 
 /** Only tab pages are cached; detail pages should re-read fresh data. */
-const keepAliveNames = ['shelf', 'me']
+const keepAliveNames = ['shelf', 'tv', 'me']
 
 /**
  * Read straight from the guard's decision. Fall back to `none` for the very
@@ -58,7 +61,10 @@ const appTheme = computed(() => {
   if (appSettings.app.theme === 'light') return 'white'
   return systemDark.value ? 'black' : 'white'
 })
-const activeTheme = computed(() => (isFullBleed.value ? settings.settings.theme : appTheme.value))
+const activeTheme = computed(() => {
+  if (isTvPlayer.value) return 'black'
+  return isFullBleed.value ? settings.settings.theme : appTheme.value
+})
 const isDarkTheme = computed(() => activeTheme.value === 'black')
 
 function syncDocumentTheme() {
@@ -128,6 +134,20 @@ watch(
 )
 
 watch(() => route.fullPath, syncNativeChrome, { flush: 'post' })
+
+/*
+ * 影视 tab is opt-in. If it is off but the route is still its tab root — a cold
+ * deep link, or the user just turned the switch off — fall back to the shelf so
+ * the page never shows a tab bar with no selected tab.
+ */
+watch(
+  [() => appSettings.loaded, () => appSettings.app.showTvTab, () => route.name],
+  () => {
+    if (appSettings.loaded && !appSettings.app.showTvTab && route.name === 'tv') {
+      void router.replace({ name: 'shelf' })
+    }
+  }
+)
 
 /*
  * Re-read the system bars when the app comes back to the foreground: the

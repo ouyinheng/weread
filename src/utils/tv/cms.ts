@@ -129,6 +129,17 @@ export async function searchSources(
   await Promise.all(Array.from({ length: Math.min(concurrency, sources.length) }, worker))
 }
 
+/* ---------- 最近更新 ---------- */
+
+/** 首页「最近更新」：取源站第一页，按入库时间倒序，通常就是最新上架的片子。 */
+export async function latestFrom(source: TvSource, limit = 12): Promise<TvItem[]> {
+  const list = await request(source, { ac: 'videolist', pg: '1' })
+  return list
+    .map(raw => toItem(raw, source))
+    .filter((v): v is TvItem => !!v)
+    .slice(0, limit)
+}
+
 /* ---------- 详情 ---------- */
 
 const detailCache = new Map<string, { at: number; data: TvDetail }>()

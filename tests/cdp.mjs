@@ -18,7 +18,7 @@
  * `flatten: true`, and run every page command in that session.
  */
 import { spawn, execSync } from 'child_process'
-import { rmSync, readFileSync, existsSync, writeFileSync } from 'fs'
+import { rmSync, readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'fs'
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
@@ -27,6 +27,31 @@ let port = 0
 
 /** Last words from Chrome's stderr, for a useful failure message. */
 let launchLog = () => ''
+
+/**
+ * Delete profiles left by runs that died without cleaning up.
+ *
+ * Each profile is ~8 MB, and a browser that outlives its script is worse than
+ * disk usage: the page inside keeps running. A listening page keeps speaking
+ * its chapter to the speakers with nothing on screen to stop it. Anything an
+ * hour old belongs to a dead run — the live browser is killed just above.
+ */
+function sweepStaleProfiles() {
+  try {
+    const cutoff = Date.now() - 3600_000
+    for (const name of readdirSync('/tmp')) {
+      if (!name.startsWith('wr-profile-')) continue
+      const path = `/tmp/${name}`
+      try {
+        if (statSync(path).mtimeMs < cutoff) rmSync(path, { recursive: true, force: true })
+      } catch {
+        /* already gone, or in use by a live browser */
+      }
+    }
+  } catch {
+    /* /tmp unreadable: nothing to sweep */
+  }
+}
 
 export async function launch() {
   /*
@@ -41,6 +66,7 @@ export async function launch() {
   } catch {
     /* nothing to kill — the normal case */
   }
+  sweepStaleProfiles()
 
   const profile = `/tmp/wr-profile-${process.pid}-${Date.now()}`
   rmSync(profile, { recursive: true, force: true })
@@ -77,6 +103,33 @@ export async function launch() {
   let chromeLog = ''
   proc.stderr?.on('data', (b) => { chromeLog = (chromeLog + String(b)).slice(-1200) })
   launchLog = () => chromeLog
+
+  /*
+   * Take the browser down with the script. `page.close()` only drops the
+   * DevTools socket — the browser keeps the page alive, and a listening page
+   * keeps speaking after the script has finished. `exit` is the only hook that
+   * fires for a normal `process.exit(0)`; the signal handlers cover Ctrl-C,
+   * which would otherwise just orphan the browser.
+   */
+  const cleanup = () => {
+    try {
+      /*
+       * SIGKILL, not SIGTERM: `exit` handlers run synchronously, so there is no
+       * second chance to delete the profile after a graceful shutdown.
+       */
+      proc.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+    try {
+      rmSync(profile, { recursive: true, force: true })
+    } catch {
+      /* Chrome may still be writing; the sweep next run collects it */
+    }
+  }
+  process.once('exit', cleanup)
+  process.once('SIGINT', () => { cleanup(); process.exit(130) })
+  process.once('SIGTERM', () => { cleanup(); process.exit(143) })
 
   const portFile = `${profile}/DevToolsActivePort`
   for (let i = 0; i < 80; i++) {

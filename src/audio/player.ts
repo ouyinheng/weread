@@ -7,9 +7,14 @@
  * Android's engine allows — there is no pause, so pausing means stopping and
  * remembering which sentence was speaking.
  *
- * Engines that queue utterances are given one sentence ahead: the next one is
- * already synthesising while the current one plays, which removes the silent
- * gap between sentences. One-shot engines stay strictly sequential.
+ * Engines that queue utterances are given two sentences ahead: the next ones
+ * are already synthesising while the current one plays, which removes the
+ * silent gap between sentences. One-shot engines stay strictly sequential.
+ *
+ * Online voices additionally get a chapter prepared up front (`prefetch`): the
+ * page waits for the first few sentences to land on disk, shows that wait as
+ * `buffering`, and lets the rest of the chapter stream in behind playback. That
+ * turns every later paragraph boundary into local file playback.
  *
  * A monotonically increasing `token` guards every await: pause / skip / exit
  * bump it, so a sentence that was in flight when the user acted cannot advance
@@ -19,7 +24,7 @@ import { computed, ref } from 'vue'
 import { createEngine, TtsCancelled, type EngineReason, type TtsEngine, type TtsVoice } from './tts'
 import type { Sentence } from './segmenter'
 
-export type ListenStatus = 'idle' | 'playing' | 'paused' | 'ended' | 'unavailable'
+export type ListenStatus = 'idle' | 'buffering' | 'playing' | 'paused' | 'ended' | 'unavailable'
 
 export interface ListenSettings {
   /** 1.0 is the engine's natural pace. */
@@ -47,13 +52,36 @@ export interface PlayerDeps {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
+/**
+ * How many sentences to have on disk before the first one starts playing.
+ *
+ * A whole chapter takes ~20–40 s to synthesise, which nobody would sit
+ * through. Six sentences is 3–5 s at three concurrent sockets — long enough to
+ * cover the first few paragraph boundaries, short enough to feel like pressing
+ * play.
+ */
+const PREFETCH_HEAD = 6
+
+/** Engines we tell ahead how many sentences? Two is enough to hide the round trip. */
+const LOOKAHEAD = 2
+
 export function useListenPlayer(deps: PlayerDeps) {
   const status = ref<ListenStatus>('idle')
   const index = ref(0)
   const reason = ref<EngineReason | undefined>()
+  /** Sentences of the chapter currently being prepared, for the loading label. */
+  const bufferProgress = ref({ done: 0, total: 0 })
 
   let engine: TtsEngine | null = null
   let token = 0
+  /** Bumped per prefetch request so stale progress events are dropped. */
+  let prefetchSeq = 0
+  /**
+   * The chapter (and settings) already prepared, by identity. Only the first
+   * play of a chapter waits — seeking within a prepared chapter must not flash
+   * the loading state again.
+   */
+  let prepared: { list: Sentence[]; voice: string; rate: number } | null = null
 
   /*
    * 'ended' still counts as active: the bar must stay up so the reader can see
@@ -61,7 +89,8 @@ export function useListenPlayer(deps: PlayerDeps) {
    * the controls the instant the last sentence lands reads as a glitch.
    */
   const active = computed(() =>
-    status.value === 'playing' || status.value === 'paused' || status.value === 'ended'
+    status.value === 'playing' || status.value === 'paused'
+    || status.value === 'ended' || status.value === 'buffering'
   )
   const available = computed(() => status.value !== 'unavailable')
 
@@ -74,6 +103,60 @@ export function useListenPlayer(deps: PlayerDeps) {
       return null
     }
     return engine
+  }
+
+  /**
+   * Get the head of the chapter onto disk, then let the rest stream in.
+   *
+   * @returns false when the run was superseded while waiting (pause, skip,
+   *          chapter change) and the caller must stop.
+   */
+  async function prepare(
+    e: TtsEngine,
+    list: Sentence[],
+    from: number,
+    gen: number,
+  ): Promise<boolean> {
+    const s = deps.settings()
+    const voice = s.voice || undefined
+    if (!e.canPrefetch?.(voice) || !e.prefetch) return true
+
+    const voiceKey = s.voice || ''
+    if (prepared && prepared.list === list && prepared.voice === voiceKey && prepared.rate === s.rate) {
+      return true
+    }
+
+    const head = Math.min(PREFETCH_HEAD, list.length - from)
+    if (head <= 0) return true
+
+    const seq = ++prefetchSeq
+    status.value = 'buffering'
+    bufferProgress.value = { done: 0, total: head }
+    try {
+      await e.prefetch(
+        list.slice(from, from + head).map(x => x.text),
+        s.rate,
+        voice,
+        (done, total) => {
+          if (seq === prefetchSeq) bufferProgress.value = { done, total }
+        },
+        seq,
+      )
+    } catch {
+      // Preparation is an optimisation, not a requirement: playback below
+      // still synthesises sentence by sentence when it fails.
+    }
+    if (gen !== token) return false
+
+    prepared = { list, voice: voiceKey, rate: s.rate }
+
+    const rest = list.slice(from + head).map(x => x.text)
+    if (rest.length) {
+      // Not awaited: the point is to be listening while this runs. Its token is
+      // newer than `seq`, so its progress events never touch the UI.
+      void e.prefetch(rest, s.rate, voice, () => {}, ++prefetchSeq).catch(() => undefined)
+    }
+    return true
   }
 
   /** The loop. Runs one sentence per iteration until the chapter ends. */
@@ -98,10 +181,9 @@ export function useListenPlayer(deps: PlayerDeps) {
 
     const voice = deps.settings().voice || undefined
     /*
-     * Every engine we ship accepts a queued sentence: the phone's own engine
-     * uses QUEUE_ADD, the web engine has its own queue, and the online engine
-     * synthesises the next sentence in the background. Asking ahead is what
-     * removes the silent gap at each paragraph boundary.
+     * Engines that queue utterances can be told ahead: the next sentences
+     * synthesise while the current one plays, which is what removes the silent
+     * gap at each paragraph boundary. One-shot engines stay sequential.
      */
     const lookahead = e.canLookahead?.(voice) === true
     const queued = new Map<number, Promise<void>>()
@@ -118,6 +200,15 @@ export function useListenPlayer(deps: PlayerDeps) {
     }
 
     index.value = clamp(from, 0, list.length - 1)
+
+    /*
+     * Online voices synthesise the chapter to disk first. `buffering` is shown
+     * for that wait only; if the user pauses or skips, the run is superseded
+     * and this returns false instead of starting playback behind their back.
+     */
+    if (!await prepare(e, list, index.value, my)) return
+    if (my !== token) return
+
     status.value = 'playing'
 
     while (my === token) {
@@ -128,7 +219,9 @@ export function useListenPlayer(deps: PlayerDeps) {
 
       deps.onSentence?.(current[at], at)
       enqueue(at)
-      if (lookahead) enqueue(at + 1)
+      if (lookahead) {
+        for (let k = 1; k <= LOOKAHEAD; k++) enqueue(at + k)
+      }
 
       try {
         await queued.get(at)
@@ -170,11 +263,22 @@ export function useListenPlayer(deps: PlayerDeps) {
     // Bump first: the in-flight sentence must not advance the index.
     token++
     status.value = 'paused'
+    await cancelPrefetch()
     await engine?.stop()
   }
 
+  /** Drop the preparation in flight — a paused reader is not downloading audio. */
+  async function cancelPrefetch() {
+    prefetchSeq++
+    try {
+      await engine?.cancelPrefetch?.()
+    } catch {
+      // Nothing was running.
+    }
+  }
+
   async function toggle() {
-    if (status.value === 'playing') {
+    if (status.value === 'playing' || status.value === 'buffering') {
       await pause()
       return
     }
@@ -212,6 +316,9 @@ export function useListenPlayer(deps: PlayerDeps) {
     token++
     status.value = 'idle'
     index.value = 0
+    bufferProgress.value = { done: 0, total: 0 }
+    prepared = null
+    await cancelPrefetch()
     await engine?.stop()
   }
 
@@ -242,6 +349,7 @@ export function useListenPlayer(deps: PlayerDeps) {
     status,
     index,
     reason,
+    bufferProgress,
     active,
     available,
     play,

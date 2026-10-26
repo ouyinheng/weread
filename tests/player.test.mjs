@@ -80,7 +80,7 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   check('ended after last', player.status.value === 'ended', player.status.value)
 }
 
-/* ---------- queuing engines get one sentence of lookahead ---------- */
+/* ---------- queuing engines get two sentences of lookahead ---------- */
 {
   const spoken = []
   const pending = []
@@ -106,15 +106,15 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   void player.play(0)
   await tick()
   check(
-    'queues the next sentence while the first is still playing',
-    spoken.length === 2 && spoken[1] === '第二句。',
+    'queues the next two sentences while the first is still playing',
+    spoken.length === 3 && spoken[1] === '第二句。' && spoken[2] === '第三句。',
     JSON.stringify(spoken)
   )
   check('highlight stays on the sentence being spoken', player.index.value === 0, player.index.value)
 
   pending.shift().resolve(); await tick()
   check('advanced once the first finished', player.index.value === 1, player.index.value)
-  check('queued a third while the second plays', spoken[2] === '第三句。', JSON.stringify(spoken))
+  check('does not re-synthesise what is already queued', spoken.length === 3, JSON.stringify(spoken))
 }
 
 /* ---------- pause keeps the sentence, resume speaks it again ---------- */
@@ -280,6 +280,100 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   await tick()
   check('offset 5 lands on sentence 1', player.index.value === 1, player.index.value)
   check('spoke the right sentence', fake.spoken[0] === '第二句。', fake.spoken[0])
+}
+
+/* ---------- online voice: the chapter is prepared before the first word ---------- */
+{
+  const spoken = []
+  let releasePrep = null
+  /** @type {Array<(done: number, total: number) => void>} */
+  const reporters = []
+  const engine = {
+    kind: 'native',
+    canLookahead: () => true,
+    canPrefetch: () => true,
+    prefetch(items, _rate, _voice, onProgress) {
+      reporters.push(onProgress)
+      return new Promise((resolve) => {
+        releasePrep = () => {
+          onProgress(items.length, items.length)
+          resolve({ ok: items.length, failed: 0 })
+        }
+      })
+    },
+    async cancelPrefetch() {},
+    async speak(text) {
+      spoken.push(text)
+      await new Promise(() => {})            // plays forever; the test never ends it
+    },
+    async stop() {},
+    async voices() { return [] },
+  }
+  const player = useListenPlayer({
+    sentences: () => sentences,
+    settings: () => baseSettings,
+    createEngine: async () => engine,
+  })
+
+  void player.play(0)
+  await tick()
+  check('shows buffering while the chapter prepares', player.status.value === 'buffering', player.status.value)
+  check('says nothing before the head is ready', spoken.length === 0, JSON.stringify(spoken))
+  check('progress starts at zero', player.bufferProgress.value.done === 0,
+    JSON.stringify(player.bufferProgress.value))
+  check('buffering counts as active', player.active.value)
+
+  releasePrep()
+  await tick()
+  check('starts playing once the head is on disk', player.status.value === 'playing', player.status.value)
+  check('spoke the first sentence after preparing', spoken[0] === '第一句。', JSON.stringify(spoken))
+  check('progress reaches the head size', player.bufferProgress.value.done === sentences.length,
+    JSON.stringify(player.bufferProgress.value))
+
+  // A second play of the same chapter must not flash the loading state again.
+  await player.pause()
+  void player.play(0)
+  await tick()
+  check('resume skips preparation', player.status.value === 'playing', player.status.value)
+}
+
+/* ---------- pausing during preparation cancels it ---------- */
+{
+  const spoken = []
+  let released = false
+  let cancels = 0
+  const engine = {
+    kind: 'native',
+    canLookahead: () => true,
+    canPrefetch: () => true,
+    prefetch() {
+      // Never resolves on its own; `cancelPrefetch` releases it, like the plugin.
+      return new Promise((resolve) => {
+        engine._resolve = () => { released = true; resolve({ ok: 0, failed: 0 }) }
+      })
+    },
+    async cancelPrefetch() {
+      cancels++
+      engine._resolve?.()
+    },
+    async speak(text) { spoken.push(text); await new Promise(() => {}) },
+    async stop() {},
+    async voices() { return [] },
+  }
+  const player = useListenPlayer({
+    sentences: () => sentences,
+    settings: () => baseSettings,
+    createEngine: async () => engine,
+  })
+
+  void player.play(0)
+  await tick()
+  await player.pause()
+  check('pause cancelled the download', cancels === 1, cancels)
+  await tick()
+  check('late preparation does not start playback', spoken.length === 0, JSON.stringify(spoken))
+  check('stays paused', player.status.value === 'paused', player.status.value)
+  check('preparation was released', released)
 }
 
 console.log(fail === 0 ? '\nALL PASS' : `\n${fail} FAILED`)

@@ -1,13 +1,17 @@
 <script setup lang="ts">
 /**
- * 影片详情：封面、简介、线路与剧集。
+ * 影片详情：背景、简介、线路与剧集。
  *
- * 线路默认选「集数最多」的一条——采集站常见的情况是线路 2 才是全的，按顺序选
- * 第一条会让用户以为没更新。已经看过的话，对应剧集上标「续看」。
+ * 参考长视频 App 的做法——封面当背景虚化，主按钮直接给「继续看 / 播放第一集」，
+ * 剧集默认只露前 20 集，其余点「展开全部」，避免一屏几十个按钮把人压住。
+ *
+ * 线路默认选「集数最多」的一条：采集站常见的情况是线路 2 才是全的，按顺序选
+ * 第一条会让用户以为没更新。
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
+import MorphIcon from '@/components/MorphIcon.vue'
 import { useTvStore } from '@/stores/tv'
 import { fetchDetail } from '@/utils/tv/cms'
 import type { TvDetail } from '@/utils/tv/types'
@@ -19,13 +23,46 @@ const store = useTvStore()
 const sourceId = String(route.query.source || '')
 const vodId = String(route.query.id || '')
 
+const COLLAPSED = 20
+
 const detail = ref<TvDetail>()
 const loading = ref(true)
 const error = ref('')
 const groupIndex = ref(0)
 const descOpen = ref(false)
+const showAll = ref(false)
+const reversed = ref(false)
 
 const group = computed(() => detail.value?.groups[groupIndex.value])
+const last = computed(() => store.historyOf(sourceId, vodId))
+const episodeCount = computed(() => group.value?.episodes.length || 0)
+
+const glowStyle = computed(() => (detail.value?.pic ? { backgroundImage: `url(${detail.value.pic})` } : {}))
+/** 短简介不需要「展开」这个假按钮。 */
+const descLong = computed(() => (detail.value?.desc?.length || 0) > 80)
+
+/** 线路按正序/倒序展示，但点击时仍要拿原始下标。 */
+const orderedEps = computed(() => {
+  const eps = group.value?.episodes || []
+  const list = eps.map((ep, index) => ({ ep, index }))
+  return reversed.value ? list.reverse() : list
+})
+const visibleEps = computed(() =>
+  showAll.value || orderedEps.value.length <= COLLAPSED
+    ? orderedEps.value
+    : orderedEps.value.slice(0, COLLAPSED),
+)
+const hiddenCount = computed(() => Math.max(0, orderedEps.value.length - COLLAPSED))
+
+/** 主按钮：看过就续看，没看过就从第一集。 */
+const primary = computed(() => {
+  const l = last.value
+  const resumeGroup = l ? detail.value?.groups[l.groupIndex] : undefined
+  if (l && resumeGroup && l.episodeIndex < resumeGroup.episodes.length) {
+    return { gi: l.groupIndex, ei: l.episodeIndex, label: `续看 ${l.episodeName}` }
+  }
+  return { gi: groupIndex.value, ei: 0, label: episodeCount.value ? '播放第 1 集' : '播放' }
+})
 
 onMounted(async () => {
   await store.load()
@@ -54,14 +91,16 @@ function bestGroupIndex(d: TvDetail): number {
   return best
 }
 
-function play(episodeIndex: number) {
+function play(episodeIndex: number, gi = groupIndex.value) {
   router.push({
     name: 'tvPlay',
-    query: { source: sourceId, id: vodId, g: String(groupIndex.value), e: String(episodeIndex) },
+    query: { source: sourceId, id: vodId, g: String(gi), e: String(episodeIndex) },
   })
 }
 
-const last = computed(() => store.historyOf(sourceId, vodId))
+function metaText(): string {
+  return [detail.value?.year, detail.value?.area, detail.value?.typeName].filter(Boolean).join(' · ')
+}
 </script>
 
 <template>
@@ -79,30 +118,37 @@ const last = computed(() => store.historyOf(sourceId, vodId))
 
       <template v-else-if="detail">
         <section class="tv-hero">
-          <div class="tv-hero__cover">
-            <img v-if="detail.pic" :src="detail.pic" alt="" referrerpolicy="no-referrer" />
-            <span v-else class="tv-hero__ph">{{ detail.name.slice(0, 2) }}</span>
-          </div>
-          <div class="tv-hero__info">
-            <h1 class="tv-hero__name">{{ detail.name }}</h1>
-            <p class="tv-hero__meta">
-              {{ [detail.year, detail.area, detail.typeName].filter(Boolean).join(' · ') }}
-            </p>
-            <p v-if="detail.remarks" class="tv-hero__remark">{{ detail.remarks }}</p>
-            <p class="tv-hero__source">来源：{{ detail.source.name }}</p>
-            <button
-              v-if="last"
-              class="tv-hero__resume"
-              @click="play(last.episodeIndex)"
-            >
-              续看 {{ last.episodeName }}
-            </button>
+          <div class="tv-hero__glow" :style="glowStyle" />
+          <div class="tv-hero__inner">
+            <div class="tv-hero__cover">
+              <img v-if="detail.pic" :src="detail.pic" alt="" referrerpolicy="no-referrer" />
+              <span v-else class="tv-hero__ph">{{ detail.name.slice(0, 2) }}</span>
+            </div>
+            <div class="tv-hero__info">
+              <h1 class="tv-hero__name">{{ detail.name }}</h1>
+              <p v-if="metaText()" class="tv-hero__meta">{{ metaText() }}</p>
+              <div class="tv-hero__tags">
+                <span v-if="detail.remarks" class="tv-hero__tag tv-hero__tag--accent">{{ detail.remarks }}</span>
+                <span v-if="episodeCount" class="tv-hero__tag">全 {{ episodeCount }} 集</span>
+                <span class="tv-hero__tag">{{ detail.source.name }}</span>
+              </div>
+            </div>
           </div>
         </section>
 
+        <div class="tv-actions">
+          <button class="tv-actions__primary" @click="play(primary.ei, primary.gi)">
+            <Icon name="play" :size="16" :width="2" />
+            <span>{{ primary.label }}</span>
+          </button>
+          <span class="tv-actions__hint">
+            {{ last ? `上次看到 ${last.episodeName}` : '从第一集开始' }}
+          </span>
+        </div>
+
         <section v-if="detail.desc" class="tv-desc" :class="{ 'tv-desc--open': descOpen }">
           <p class="tv-desc__text">{{ detail.desc }}</p>
-          <button class="tv-desc__toggle" @click="descOpen = !descOpen">
+          <button v-if="descLong" class="tv-desc__toggle" @click="descOpen = !descOpen">
             {{ descOpen ? '收起' : '展开' }}
           </button>
         </section>
@@ -114,23 +160,36 @@ const last = computed(() => store.historyOf(sourceId, vodId))
               :key="g.name + i"
               class="tv-eps__group"
               :class="{ 'tv-eps__group--active': i === groupIndex }"
-              @click="groupIndex = i"
+              @click="groupIndex = i; showAll = false"
             >
               {{ g.name }}（{{ g.episodes.length }}）
             </button>
           </div>
 
-          <div class="tv-eps__grid">
-            <button
-              v-for="(ep, i) in group?.episodes || []"
-              :key="ep.url"
-              class="tv-eps__item"
-              :class="{ 'tv-eps__item--last': last && last.groupIndex === groupIndex && last.episodeIndex === i }"
-              @click="play(i)"
-            >
-              {{ ep.name }}
+          <div class="tv-eps__head">
+            <span class="tv-eps__title">选集</span>
+            <span class="tv-eps__count">{{ episodeCount }} 集</span>
+            <button class="tv-eps__order" @click="reversed = !reversed">
+              {{ reversed ? '倒序' : '正序' }}
             </button>
           </div>
+
+          <div class="tv-eps__grid">
+            <button
+              v-for="row in visibleEps"
+              :key="row.ep.url"
+              class="tv-eps__item"
+              :class="{ 'tv-eps__item--last': last && last.groupIndex === groupIndex && last.episodeIndex === row.index }"
+              @click="play(row.index)"
+            >
+              {{ row.ep.name }}
+            </button>
+          </div>
+
+          <button v-if="hiddenCount" class="tv-eps__more" @click="showAll = !showAll">
+            {{ showAll ? '收起剧集' : `展开全部 ${episodeCount} 集` }}
+            <MorphIcon :name="showAll ? 'chevron-down' : 'chevron-right'" :size="14" />
+          </button>
         </section>
 
         <div v-else class="tv-detail__state">这个源没有返回可播放地址，换一个源试试</div>
@@ -149,10 +208,16 @@ const last = computed(() => store.historyOf(sourceId, vodId))
 }
 
 .tv-detail__bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: 2px;
   padding: calc(8px + var(--safe-top)) 10px 8px;
+  background: linear-gradient(rgba(0, 0, 0, 0.35), transparent);
 }
 .tv-detail__back {
   display: flex;
@@ -162,11 +227,11 @@ const last = computed(() => store.historyOf(sourceId, vodId))
   height: 34px;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: #fff;
 }
 .tv-detail__bar-title {
   font-size: 15px;
-  color: var(--text);
+  color: #fff;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -177,17 +242,43 @@ const last = computed(() => store.historyOf(sourceId, vodId))
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 4px 16px calc(24px + var(--safe-bottom));
+  padding: 0 0 calc(24px + var(--safe-bottom));
 }
 .tv-detail__state {
-  padding: 40px 0;
+  padding: 40px 16px;
   text-align: center;
   font-size: 13px;
   color: var(--text-secondary);
 }
 .tv-detail__state--error { color: #d9534f; }
 
-.tv-hero { display: flex; gap: 14px; padding: 6px 0 14px; }
+.tv-hero {
+  position: relative;
+  padding: calc(52px + var(--safe-top)) 16px 14px;
+  overflow: hidden;
+}
+.tv-hero__glow {
+  position: absolute;
+  inset: -20% -10% -10%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(26px) saturate(1.2);
+  opacity: 0.4;
+  transform: scale(1.1);
+  pointer-events: none;
+}
+.tv-hero__glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(var(--bg) 12%, rgba(0, 0, 0, 0.25) 55%, var(--bg) 96%);
+}
+.tv-hero__inner {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+}
 .tv-hero__cover {
   flex: 0 0 auto;
   width: 104px;
@@ -195,6 +286,7 @@ const last = computed(() => store.historyOf(sourceId, vodId))
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg-secondary);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
 }
 .tv-hero__cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .tv-hero__ph {
@@ -205,34 +297,67 @@ const last = computed(() => store.historyOf(sourceId, vodId))
   font-size: 22px;
   color: var(--text-secondary);
 }
-.tv-hero__info { flex: 1; min-width: 0; }
+.tv-hero__info { flex: 1; min-width: 0; padding-bottom: 2px; }
 .tv-hero__name {
-  margin: 2px 0 8px;
-  font-size: 19px;
+  margin: 0 0 6px;
+  font-size: 20px;
   line-height: 1.3;
   font-weight: 600;
   color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-.tv-hero__meta,
-.tv-hero__remark,
-.tv-hero__source {
-  margin: 0 0 6px;
+.tv-hero__meta {
+  margin: 0 0 8px;
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.5;
 }
-.tv-hero__resume {
-  margin-top: 6px;
-  border: 0;
-  border-radius: 16px;
-  padding: 6px 14px;
-  background: var(--accent-soft-strong);
+.tv-hero__tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tv-hero__tag {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tv-hero__tag--accent {
+  background: var(--accent-soft);
   color: var(--accent);
-  font-size: 12px;
-  font-family: inherit;
 }
 
-.tv-desc { position: relative; padding-bottom: 4px; }
+.tv-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 16px 2px;
+}
+.tv-actions__primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  height: 42px;
+  border: 0;
+  border-radius: 21px;
+  background: var(--accent);
+  color: var(--text-inverse);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+}
+.tv-actions__primary:active { background: var(--accent-press); }
+.tv-actions__hint { flex: 0 0 auto; font-size: 11px; color: var(--text-secondary); }
+
+.tv-desc { position: relative; padding: 16px 16px 0; }
 .tv-desc__text {
   margin: 0;
   font-size: 13px;
@@ -255,19 +380,19 @@ const last = computed(() => store.historyOf(sourceId, vodId))
   padding: 2px 0;
 }
 
-.tv-eps { margin-top: 18px; }
+.tv-eps { margin-top: 18px; padding: 0 16px; }
 .tv-eps__groups {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding-bottom: 10px;
+  padding-bottom: 12px;
   scrollbar-width: none;
 }
 .tv-eps__groups::-webkit-scrollbar { display: none; }
 .tv-eps__group {
   flex: 0 0 auto;
   border: 1px solid var(--divider);
-  border-radius: 14px;
+  border-radius: 15px;
   padding: 5px 12px;
   background: var(--bg);
   color: var(--text-secondary);
@@ -280,13 +405,31 @@ const last = computed(() => store.historyOf(sourceId, vodId))
   color: var(--accent);
 }
 
+.tv-eps__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tv-eps__title { font-size: 15px; font-weight: 600; color: var(--text); }
+.tv-eps__count { flex: 1; font-size: 11px; color: var(--text-secondary); }
+.tv-eps__order {
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  padding: 3px 10px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+}
+
 .tv-eps__grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 .tv-eps__item {
-  height: 36px;
+  height: 38px;
   border: 0;
   border-radius: 6px;
   background: var(--bg-secondary);
@@ -302,5 +445,22 @@ const last = computed(() => store.historyOf(sourceId, vodId))
 .tv-eps__item--last {
   background: var(--accent-soft);
   color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tv-eps__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 8px;
+  height: 38px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
 }
 </style>

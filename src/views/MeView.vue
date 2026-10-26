@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onActivated, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBookStore, useBookmarkStore } from '@/stores'
 import { useSourceStore } from '@/stores/source'
@@ -8,9 +8,11 @@ import type { Highlight } from '@/types'
 import { getAllReadingTime, formatDuration } from '@/utils/reading-time'
 import { dbGetAll } from '@/utils/db'
 import { storageIssues } from '@/utils/storage-errors'
-import { migrationState } from '@/utils/storage/migrate'
 import type { IconName } from '@/components/icon-names'
 import Icon from '@/components/Icon.vue'
+
+// 组件名对上 App.vue 的 keep-alive include，tab 页面才不会一返回就整页重建。
+defineOptions({ name: 'me' })
 
 const router = useRouter()
 const bookStore = useBookStore()
@@ -115,7 +117,7 @@ async function measureStorage() {
   }
 }
 
-onMounted(async () => {
+async function refresh() {
   await bookStore.loadBooks()
   await bookmarkStore.loadAll()
   await sourceStore.load()
@@ -123,6 +125,18 @@ onMounted(async () => {
   noteCount.value = (await dbGetAll<Highlight>('highlights')).length
   totalMs.value = await getAllReadingTime()
   await measureStorage()
+}
+
+onMounted(refresh)
+// keep-alive 回到本页时重算统计（阅读时长、笔记数在别处会变）。
+// 首次激活紧跟 onMounted，跳过一次避免重复算。
+let activatedBefore = false
+onActivated(() => {
+  if (!activatedBefore) {
+    activatedBefore = true
+    return
+  }
+  void refresh()
 })
 </script>
 
@@ -193,24 +207,6 @@ onMounted(async () => {
           <span class="me__row-value">{{ tvStore.sources.length }} 个</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
-      </div>
-
-      <div
-        v-if="migrationState.busy || migrationState.completed || migrationState.error"
-        class="me__card me__rows"
-      >
-        <div class="me__row">
-          <span class="me__row-label">存储迁移</span>
-          <span class="me__row-value" :class="{ 'me__row-value--accent': migrationState.completed }">
-            {{
-              migrationState.error
-                ? `未完成：${migrationState.error}`
-                : migrationState.completed
-                  ? '已完成'
-                  : `迁移中 ${migrationState.done}/${migrationState.total}`
-            }}
-          </span>
-        </div>
       </div>
 
       <p v-if="storageRatio >= 0.8" class="me__warn">

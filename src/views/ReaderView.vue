@@ -947,6 +947,7 @@ const {
   index: listenIndex,
   reason: listenReason,
   active: listenActive,
+  bufferProgress: listenBuffer,
 } = listen
 
 /**
@@ -1976,6 +1977,8 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       :remain-text="listenRemainText"
       :timer-left="listenTimerLeft"
       :reason="listenReason ? reasonText(listenReason) : undefined"
+      :buffer-done="listenBuffer.done"
+      :buffer-total="listenBuffer.total"
       :load-voices="listen.voices"
       @toggle="listen.toggle()"
       @prev="listen.prev()"

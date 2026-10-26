@@ -5,18 +5,25 @@ import android.media.MediaPlayer;
 import android.os.Handler;
 import android.os.Looper;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -43,10 +50,17 @@ import okio.ByteString;
  *
  * One WebSocket per sentence, but **two sentences are in flight**: while
  * sentence N is playing, sentence N+1 is already being synthesised into its own
- * temp file. The JS player asks one sentence ahead, so the next file is ready
- * when the current one ends and playback starts immediately instead of waiting
- * for a fresh network round trip. That wait was the long pause at every
- * paragraph boundary.
+ * file. The JS player asks one sentence ahead, so the next file is ready when
+ * the current one ends and playback starts immediately instead of waiting for a
+ * fresh network round trip. That wait was the long pause at every paragraph
+ * boundary.
+ *
+ * `prefetch` goes one step further: the page asks for a whole chapter up front,
+ * the plugin synthesises it with {@link #PREFETCH_CONCURRENCY} sockets and keeps
+ * the mp3s in `cacheDir/edge-tts`. `speak` then finds the file already on disk,
+ * so listening to a prepared chapter is pure local playback — no network in the
+ * loop at all, and no gap between paragraphs. Files are keyed by
+ * text+voice+pitch+rate, so changing any of those is a cache miss by design.
  *
  * Failure is deliberately noisy: if the network is down the JS layer switches
  * to the system voice or shows an error, rather than pretending to play.
@@ -68,6 +82,17 @@ public class EdgeTtsPlugin extends Plugin {
     private static final long SYNTH_TIMEOUT_MS = 25000L;
     private static final String OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+    private static final String DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural";
+    /** Three sockets at a time keeps a chapter ahead of playback without abusing the endpoint. */
+    private static final int PREFETCH_CONCURRENCY = 3;
+    /**
+     * Cache ceiling. One sentence is ~8–20 KB at this bitrate, so 400 files is
+     * a few MB of app cache — enough for a couple of chapters, small enough
+     * that Android never counts it against us.
+     */
+    private static final int MAX_CACHE_FILES = 400;
+    private static final String CACHE_DIR = "edge-tts";
+
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(12, TimeUnit.SECONDS)
             // WebSocket frames arrive whenever the server finishes a chunk; a
@@ -88,6 +113,8 @@ public class EdgeTtsPlugin extends Plugin {
         final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         WebSocket socket;
         File file;
+        /** True when `file` is a cached chapter mp3 that outlives this sentence. */
+        boolean keepFile;
         volatile int attempt;
         boolean started;
         boolean ready;
@@ -110,12 +137,340 @@ public class EdgeTtsPlugin extends Plugin {
     /** Bumped on stop so late socket callbacks can tell they are stale. */
     private volatile int session;
 
+    /** Bumped by `cancelPrefetch`; a prefetcher from an older run stops writing. */
+    private int prefetchGen;
+    /** Sockets of the running prefetch, so a cancel can close them immediately. */
+    private final List<WebSocket> prefetchSockets = new ArrayList<>();
+
     /** Always available; network health is judged when a sentence is spoken. */
     @PluginMethod
     public void isAvailable(PluginCall call) {
         JSObject out = new JSObject();
         out.put("available", true);
         call.resolve(out);
+    }
+
+    /* ---------- 章节音频缓存 ---------- */
+
+    private File cacheDir() {
+        File dir = new File(getContext().getCacheDir(), CACHE_DIR);
+        if (!dir.exists() && !dir.mkdirs()) {
+            // Fall back to the cache root; losing the subdirectory is harmless.
+            return getContext().getCacheDir();
+        }
+        return dir;
+    }
+
+    /**
+     * Identity of one sentence's audio. Every parameter that changes the sound
+     * is part of the key — replaying at 1.3x after listening at 1.0x must not
+     * reuse the 1.0x file.
+     */
+    private static String cacheKey(String text, String voice, String pitch, double rate) {
+        String raw = voice + "|" + pitch + "|"
+                + String.format(Locale.US, "%.2f", rate) + "|" + text;
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-1");
+            byte[] hash = md.digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) sb.append(String.format(Locale.US, "%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(raw.hashCode());
+        }
+    }
+
+    private File cacheFileOf(String text, String voice, String pitch, double rate) {
+        return new File(cacheDir(), "edge-" + cacheKey(text, voice, pitch, rate) + ".mp3");
+    }
+
+    /** The cached mp3 for this sentence, or null when it has not been prepared. */
+    private File cachedFileOf(String text, String voice, String pitch, double rate) {
+        File f = cacheFileOf(text, voice, pitch, rate);
+        // A half-written file is worse than a cache miss.
+        return f.exists() && f.length() > 512 ? f : null;
+    }
+
+    /** Keep the newest {@link #MAX_CACHE_FILES}; drop the rest oldest-first. */
+    private void trimCache() {
+        File[] files = cacheDir().listFiles((dir, name) -> name.startsWith("edge-") && name.endsWith(".mp3"));
+        if (files == null || files.length <= MAX_CACHE_FILES) return;
+        Arrays.sort(files, Comparator.comparingLong(File::lastModified));
+        long cutoff = System.currentTimeMillis() - 10 * 60 * 1000L;
+        int excess = files.length - MAX_CACHE_FILES;
+        for (File f : files) {
+            if (excess <= 0) break;
+            // Never pull a file out from under a prefetch that is still writing it.
+            if (f.lastModified() > cutoff) break;
+            if (f.delete()) excess--;
+        }
+    }
+
+    /**
+     * Synthesise a whole chapter ahead of playback.
+     *
+     * @param items   `[{ "text": "…" }]`, in reading order
+     * @param voice   short name such as `zh-CN-YunxiNeural`
+     * @param pitch   prosody pitch, same value `speak` would use
+     * @param rate    playback rate; part of the cache key
+     * @param token   opaque number echoed back on every progress event, so the
+     *                page can ignore events from a superseded run
+     *
+     * Resolves with `{ok, failed, cached}` once every sentence has been dealt
+     * with — the page decides how many sentences it actually waits for.
+     */
+    @PluginMethod
+    public void prefetch(PluginCall call) {
+        JSArray items = call.getArray("items");
+        final String voice = call.getString("voice", DEFAULT_VOICE);
+        final String pitch = call.getString("pitch", "+0Hz");
+        final double rate = call.getDouble("rate", 1.0);
+        final int token = call.getInt("token", 0);
+
+        List<String> texts = new ArrayList<>();
+        if (items != null) {
+            for (int i = 0; i < items.length(); i++) {
+                try {
+                    JSONObject o = items.getJSONObject(i);
+                    String t = o.optString("text", "");
+                    if (!t.trim().isEmpty()) texts.add(t);
+                } catch (JSONException ignored) {
+                    // Skip malformed entries; they are not worth failing the batch.
+                }
+            }
+        }
+
+        final Prefetcher job = new Prefetcher(texts, voice, pitch, rate, token, call);
+        handler.post(job::start);
+    }
+
+    /** Abandon the running prefetch; its sockets close and partial files stay on disk. */
+    @PluginMethod
+    public void cancelPrefetch(PluginCall call) {
+        handler.post(() -> {
+            prefetchGen++;
+            for (WebSocket ws : prefetchSockets) {
+                try {
+                    ws.cancel();
+                } catch (Exception ignored) {
+                    // Already closed.
+                }
+            }
+            prefetchSockets.clear();
+        });
+        call.resolve();
+    }
+
+    /**
+     * One prefetch run. Kept separate from the playback queue on purpose: the
+     * player's `stop()` invalidates every queued sentence, and a preparation
+     * that the user is still waiting for must not die with it.
+     */
+    private final class Prefetcher {
+        private final List<String> texts;
+        private final String voice;
+        private final String pitch;
+        private final double rate;
+        private final int token;
+        private final PluginCall call;
+        private final int gen = prefetchGen;
+        private int next;
+        private int done;
+        private int failed;
+        private int cached;
+        private int running;
+        private boolean settled;
+
+        Prefetcher(List<String> texts, String voice, String pitch, double rate, int token, PluginCall call) {
+            this.texts = texts;
+            this.voice = voice;
+            this.pitch = pitch;
+            this.rate = rate;
+            this.token = token;
+            this.call = call;
+        }
+
+        void start() {
+            pump();
+        }
+
+        private boolean live() {
+            return !settled && gen == prefetchGen;
+        }
+
+        private void pump() {
+            if (!live()) {
+                settle();
+                return;
+            }
+            while (running < PREFETCH_CONCURRENCY && next < texts.size()) {
+                String text = texts.get(next++);
+                File hit = cachedFileOf(text, voice, pitch, rate);
+                if (hit != null) {
+                    cached++;
+                    done++;
+                    emitProgress();
+                    continue;
+                }
+                running++;
+                synth(text, 0);
+            }
+            if (running == 0 && next >= texts.size()) {
+                settle();
+            }
+        }
+
+        /** One sentence: connect, collect `Path:audio`, write the mp3, advance. */
+        private void synth(String text, int attempt) {
+            if (!live()) return;
+            String requestId = UUID.randomUUID().toString().replace("-", "");
+            String url = WSS_URL
+                    + "?TrustedClientToken=" + TRUSTED_CLIENT_TOKEN
+                    + "&Sec-MS-GEC=" + EdgeDrm.generateSecMsGec()
+                    + "&Sec-MS-GEC-Version=" + SEC_MS_GEC_VERSION
+                    + "&ConnectionId=" + UUID.randomUUID().toString().replace("-", "");
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("Origin", ORIGIN)
+                    .header("User-Agent", USER_AGENT)
+                    .header("Pragma", "no-cache")
+                    .header("Cache-Control", "no-cache")
+                    .header("Accept-Language", "en-US,en;q=0.9")
+                    .header("Cookie", "muid=" + muid() + ";")
+                    .build();
+
+            WebSocket ws = client.newWebSocket(request, new WebSocketListener() {
+                private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                private volatile boolean complete = false;
+
+                @Override
+                public void onOpen(WebSocket socket, Response response) {
+                    if (!live()) {
+                        socket.cancel();
+                        return;
+                    }
+                    socket.send(configMessage());
+                    socket.send(ssmlMessage(requestId, text, voice, pitch, rate));
+                }
+
+                @Override
+                public void onMessage(WebSocket socket, String message) {
+                    if (message != null && message.contains("Path:turn.end")) {
+                        complete = true;
+                        handler.post(() -> write(text));
+                    }
+                }
+
+                @Override
+                public void onMessage(WebSocket socket, ByteString bytes) {
+                    byte[] data = bytes.toByteArray();
+                    if (data.length < 2) return;
+                    int headerLength = ((data[0] & 0xFF) << 8) | (data[1] & 0xFF);
+                    if (data.length < 2 + headerLength) return;
+                    String header = new String(data, 2, headerLength, StandardCharsets.UTF_8);
+                    if (!header.contains("Path:audio")) return;
+                    synchronized (buffer) {
+                        if (live()) buffer.write(data, 2 + headerLength, data.length - 2 - headerLength);
+                    }
+                }
+
+                @Override
+                public void onFailure(WebSocket socket, Throwable t, Response response) {
+                    if (complete) return;
+                    handler.post(() -> retry(text, attempt));
+                }
+
+                @Override
+                public void onClosed(WebSocket socket, int code, String reason) {
+                    if (complete) return;
+                    // Malformed SSML would fail identically on a retry.
+                    if (code == 1003 || code == 1007 || code == 1008) handler.post(() -> give(text));
+                    else handler.post(() -> retry(text, attempt));
+                }
+
+                /** Called on the main thread once the take is complete. */
+                private void write(String text) {
+                    byte[] audio;
+                    synchronized (buffer) {
+                        audio = buffer.toByteArray();
+                    }
+                    if (!live() || audio.length == 0) {
+                        give(text);
+                        return;
+                    }
+                    try {
+                        File file = cacheFileOf(text, voice, pitch, rate);
+                        FileOutputStream out = new FileOutputStream(file);
+                        out.write(audio);
+                        out.close();
+                        done++;
+                    } catch (Exception e) {
+                        failed++;
+                    } finally {
+                        running--;
+                        emitProgress();
+                        pump();
+                    }
+                }
+            });
+            prefetchSockets.add(ws);
+        }
+
+        /** Retry once more, or count the sentence as failed. */
+        private void retry(String text, int attempt) {
+            if (!live()) {
+                settle();
+                return;
+            }
+            running--;
+            if (attempt + 1 >= MAX_ATTEMPTS) {
+                failed++;
+                done++;
+                emitProgress();
+                pump();
+                return;
+            }
+            running++;
+            synth(text, attempt + 1);
+        }
+
+        private void give(String text) {
+            if (!live()) {
+                settle();
+                return;
+            }
+            running--;
+            failed++;
+            done++;
+            emitProgress();
+            pump();
+        }
+
+        private void emitProgress() {
+            if (!live()) return;
+            JSObject data = new JSObject();
+            data.put("token", token);
+            data.put("done", done);
+            data.put("total", texts.size());
+            data.put("failed", failed);
+            notifyListeners("onPrefetchProgress", data, true);
+        }
+
+        private void settle() {
+            if (settled) return;
+            settled = true;
+            prefetchSockets.clear();
+            trimCache();
+            JSObject out = new JSObject();
+            out.put("ok", done - failed);
+            out.put("failed", failed);
+            out.put("cached", cached);
+            try {
+                call.resolve(out);
+            } catch (Exception ignored) {
+                // The page may have dropped the call (navigated away).
+            }
+        }
     }
 
     /**
@@ -184,6 +539,17 @@ public class EdgeTtsPlugin extends Plugin {
 
     private void startSynthesis(Job job) {
         job.started = true;
+        /*
+         * A prepared chapter is played straight off disk: no socket, no wait,
+         * and therefore no gap before this sentence starts.
+         */
+        File hit = cachedFileOf(job.text, job.voice, job.pitch, job.rate);
+        if (hit != null) {
+            job.file = hit;
+            job.keepFile = true;
+            job.ready = true;
+            return;
+        }
         job.attempt = 0;
         job.timeout = () -> fail(job, "timeout");
         handler.postDelayed(job.timeout, SYNTH_TIMEOUT_MS);
@@ -237,7 +603,8 @@ public class EdgeTtsPlugin extends Plugin {
         job.socket = null;
         if (ws != null) ws.cancel();
         if (job.file != null) {
-            job.file.delete();
+            // Cached chapter audio is shared with the prefetcher — keep it.
+            if (!job.keepFile) job.file.delete();
             job.file = null;
         }
         job.ready = false;
@@ -287,11 +654,18 @@ public class EdgeTtsPlugin extends Plugin {
             return;
         }
         try {
-            File file = new File(getContext().getCacheDir(), "edge-tts-" + job.id + ".mp3");
+            /*
+             * Always write to the cache path, not a throwaway name: whatever
+             * gets synthesised here is also the file the prefetcher would have
+             * produced, so replaying the chapter — or resuming after a pause —
+             * skips the network entirely.
+             */
+            File file = cacheFileOf(job.text, job.voice, job.pitch, job.rate);
             FileOutputStream out = new FileOutputStream(file);
             out.write(audio);
             out.close();
             job.file = file;
+            job.keepFile = true;
             job.ready = true;
             clearTimeout(job);
             pump();
@@ -353,7 +727,8 @@ public class EdgeTtsPlugin extends Plugin {
         queue.remove(job);
         job.ready = false;
         if (job.file != null) {
-            job.file.delete();
+            // Synthesised audio lands in the chapter cache and stays there.
+            if (!job.keepFile) job.file.delete();
             job.file = null;
         }
         notifyDone(job.id);
@@ -464,6 +839,17 @@ public class EdgeTtsPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        handler.post(() -> {
+            prefetchGen++;
+            for (WebSocket ws : prefetchSockets) {
+                try {
+                    ws.cancel();
+                } catch (Exception ignored) {
+                    // Already closed.
+                }
+            }
+            prefetchSockets.clear();
+        });
         handler.post(this::stopInternal);
         super.handleOnDestroy();
     }

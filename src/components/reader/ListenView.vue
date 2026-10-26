@@ -8,6 +8,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import Icon from '@/components/Icon.vue'
+import MorphIcon from '@/components/MorphIcon.vue'
 import type { ListenStatus } from '@/audio/player'
 import { voiceLabel, type TtsVoice } from '@/audio/tts'
 
@@ -30,6 +31,9 @@ const props = defineProps<{
   timerLeft: number
   /** Why it cannot play, when status is 'unavailable'. */
   reason?: string
+  /** 在线音色准备进度：已完成句数 / 本次要等的句数。 */
+  bufferDone?: number
+  bufferTotal?: number
   loadVoices: () => Promise<TtsVoice[]>
 }>()
 
@@ -65,10 +69,22 @@ const TIMERS = [
 ]
 
 const playing = computed(() => props.status === 'playing')
+const buffering = computed(() => props.status === 'buffering')
 const unavailable = computed(() => props.status === 'unavailable')
 const ended = computed(() => props.status === 'ended')
 const rateText = computed(() => `${Number(props.rate.toFixed(2))}x`)
 const percent = computed(() => (props.total > 1 ? props.index / (props.total - 1) : 0))
+
+/**
+ * 「正在准备 3/6」。在线音色把整章合成到本机，第一句之前要等这一小段，
+ * 之后每个段落都不再等网络 —— 所以这里必须说清楚在等什么，而不是空转圈。
+ */
+const bufferText = computed(() => {
+  const total = props.bufferTotal || 0
+  if (!total) return '正在准备音频…'
+  const done = Math.min(props.bufferDone || 0, total)
+  return `正在准备音频 ${done}/${total}`
+})
 
 const offlineVoices = computed(() => voices.value.filter(v => v.local))
 const emotionalVoices = computed(() => voices.value.filter(v => v.provider === 'edge'))
@@ -178,6 +194,10 @@ watch(sheet, (v) => {
       </template>
       <template v-else>
         <p class="lv__sentence">{{ sentence || '…' }}</p>
+        <p v-if="buffering" class="lv__loading">
+          <span class="lv__spinner lv__spinner--sm" aria-hidden="true" />
+          {{ bufferText }}
+        </p>
         <p class="lv__source">{{ chapterTitle }}</p>
       </template>
     </article>
@@ -210,7 +230,7 @@ watch(sheet, (v) => {
     <section class="lv__progress">
       <div class="lv__progress-label">
         <span>{{ total ? `第 ${index + 1} / ${total} 句` : '暂无内容' }}</span>
-        <span>{{ remainText }}</span>
+        <span>{{ buffering ? '准备中' : remainText }}</span>
       </div>
       <input
         class="lv__range"
@@ -236,11 +256,13 @@ watch(sheet, (v) => {
       </button>
       <button
         class="lv__main"
-        :aria-label="playing ? '暂停' : '播放'"
+        :class="{ 'lv__main--busy': buffering }"
+        :aria-label="buffering ? '取消准备' : playing ? '暂停' : '播放'"
         :disabled="unavailable"
         @click="emit('toggle')"
       >
-        <Icon :name="playing ? 'pause' : 'play'" :size="30" :width="1.9" />
+        <span v-if="buffering" class="lv__spinner" aria-hidden="true" />
+        <MorphIcon v-else :name="playing ? 'pause' : 'play'" :size="30" :width="1.9" />
       </button>
       <button class="lv__step" aria-label="下一句" :disabled="unavailable" @click="emit('next')">
         <Icon name="skip-forward" :size="26" :width="1.8" />
@@ -536,6 +558,43 @@ watch(sheet, (v) => {
   color: rgba(243, 244, 234, 0.42);
 }
 
+/* 在线音色先把本章合成到本机，这一行说明在等什么。 */
+.lv__loading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  font-size: calc(12px * var(--app-font-scale));
+  font-variant-numeric: tabular-nums;
+  color: rgba(243, 244, 234, 0.62);
+}
+
+.lv__spinner {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 3px solid rgba(51, 58, 43, 0.16);
+  border-top-color: rgba(51, 58, 43, 0.8);
+  animation: lvSpin 720ms linear infinite;
+}
+
+.lv__spinner--sm {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+  border-color: rgba(243, 244, 234, 0.2);
+  border-top-color: rgba(243, 244, 234, 0.8);
+}
+
+@keyframes lvSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lv__spinner { animation-duration: 2s; }
+}
+
 .lv__warn {
   font-size: calc(16px * var(--app-font-scale));
   line-height: 1.6;
@@ -693,6 +752,20 @@ watch(sheet, (v) => {
   background: rgba(243, 244, 234, 0.92);
   color: #333a2b;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+/*
+ * 准备中：按钮转成半透明深底 + 白圈。浅底上的深色圆环在深绿页面上几乎看不见，
+ * 而这正是用户唯一会盯着看的那个位置。
+ */
+.lv__main--busy {
+  background: rgba(243, 244, 234, 0.14);
+  box-shadow: none;
+}
+
+.lv__main--busy .lv__spinner {
+  border-color: rgba(243, 244, 234, 0.22);
+  border-top-color: #f3f4ea;
 }
 
 .lv__cards {

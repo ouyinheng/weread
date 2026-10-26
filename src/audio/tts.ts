@@ -48,11 +48,34 @@ export interface NativeEdgeTtsPlugin {
     /** Prosody pitch, e.g. `-6Hz`. */
     pitch?: string
   }): Promise<{ utteranceId: string; queued: boolean }>
+  /**
+   * Synthesise a batch to the plugin's disk cache. Resolves when every item has
+   * either landed on disk or failed; progress arrives on `onPrefetchProgress`.
+   */
+  prefetch(o: {
+    items: { text: string }[]
+    voice?: string
+    pitch?: string
+    rate?: number
+    /** Echoed back on progress events so stale runs can be ignored. */
+    token?: number
+  }): Promise<{ ok?: number; failed?: number; cached?: number }>
+  cancelPrefetch(): Promise<void>
   stop(): Promise<void>
   addListener(
     event: 'onStart' | 'onDone' | 'onError',
     cb: (d: { utteranceId: string }) => void
   ): Promise<{ remove: () => Promise<void> }>
+  addListener(
+    event: 'onPrefetchProgress',
+    cb: (d: { token: number; done: number; total: number; failed: number }) => void
+  ): Promise<{ remove: () => Promise<void> }>
+}
+
+/** Progress report for a chapter being prepared. */
+export interface PrefetchProgress {
+  done: number
+  total: number
 }
 
 /**
@@ -230,6 +253,25 @@ export interface TtsEngine {
   /** Stops immediately; any in-flight `speak()` rejects as cancelled. */
   stop(): Promise<void>
   voices(): Promise<TtsVoice[]>
+  /**
+   * True when this voice can be synthesised to disk before playback. Only the
+   * online engine can: on-device engines have no way to render audio to a file
+   * through this plugin, and the web engine is a dev-only fallback.
+   */
+  canPrefetch?(voice?: string): boolean
+  /**
+   * Prepare sentences for playback. Resolves when they are on disk (or failed);
+   * `onProgress` reports how many are done so the UI can show the wait.
+   */
+  prefetch?(
+    items: string[],
+    rate: number,
+    voice: string | undefined,
+    onProgress: (done: number, total: number) => void,
+    token: number
+  ): Promise<{ ok: number; failed: number }>
+  /** Abandon a preparation in flight (pause / leave / chapter change). */
+  cancelPrefetch?(): Promise<void>
 }
 
 /** Cancellation is not a failure — the player checks this to stay quiet. */
@@ -356,6 +398,8 @@ function webEngine(): TtsEngine | null {
  */
 async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
   const pending = new Map<string, { resolve: () => void; reject: (e: unknown) => void }>()
+  /** token → the callback that one `prefetch` call is waiting on. */
+  const progress = new Map<number, (done: number, total: number) => void>()
 
   const settle = (id: string, ok: boolean) => {
     const hooks = pending.get(id)
@@ -367,12 +411,43 @@ async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
 
   await plugin.addListener('onDone', ({ utteranceId }) => settle(utteranceId, true))
   await plugin.addListener('onError', ({ utteranceId }) => settle(utteranceId, false))
+  await plugin.addListener('onPrefetchProgress', (d) => {
+    progress.get(d.token)?.(d.done ?? 0, d.total ?? 0)
+  })
 
   return {
     kind: 'native',
     // The native side keeps two sentences in flight: the next one synthesises
     // while the current one plays, so the player can ask ahead.
     canLookahead: () => true,
+    /*
+     * Everything the prefetcher writes is keyed by text+voice+pitch+rate, which
+     * is exactly what `speak` looks up, so a prepared chapter plays from disk.
+     */
+    canPrefetch: () => true,
+    async prefetch(items, rate, voice, onProgress, token) {
+      const curated = EDGE_VOICES.find(v => v.id === voice) || EDGE_VOICES[0]
+      progress.set(token, onProgress)
+      try {
+        const r = await plugin.prefetch({
+          items: items.map(text => ({ text })),
+          voice: curated.voice,
+          pitch: curated.pitch,
+          rate,
+          token,
+        })
+        return { ok: Number(r?.ok) || 0, failed: Number(r?.failed) || 0 }
+      } finally {
+        progress.delete(token)
+      }
+    },
+    async cancelPrefetch() {
+      try {
+        await plugin.cancelPrefetch()
+      } catch {
+        // Nothing was running.
+      }
+    },
     async speak(text, rate, voice) {
       const curated = EDGE_VOICES.find(v => v.id === voice) || EDGE_VOICES[0]
       const { utteranceId, queued } = await plugin.speak({
@@ -424,6 +499,24 @@ function compositeEngine(system: TtsEngine, edge: TtsEngine): TtsEngine {
       if (isOnline(voice)) return edge.speak(text, rate, voice)
       if (system.kind === 'none') return edge.speak(text, rate, EDGE_VOICES[0].id)
       return system.speak(text, rate, voice)
+    },
+    /*
+     * Only the online path can be prepared ahead. When the phone's own engine
+     * is being used, playback is already a local queue — there is nothing to
+     * render to disk, and a loading state would be pure ceremony.
+     */
+    canPrefetch(voice) {
+      const online = isOnline(voice) || system.kind === 'none'
+      return online && edge.canPrefetch?.(voice) === true
+    },
+    prefetch(items, rate, voice, onProgress, token) {
+      if (edge.prefetch && (isOnline(voice) || system.kind === 'none')) {
+        return edge.prefetch(items, rate, voice, onProgress, token)
+      }
+      return Promise.resolve({ ok: 0, failed: 0 })
+    },
+    async cancelPrefetch() {
+      await edge.cancelPrefetch?.()
     },
     async stop() {
       await Promise.all([system.stop(), edge.stop()])

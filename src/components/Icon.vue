@@ -57,6 +57,14 @@ withDefaults(
     <path v-else-if="name === 'chevron-right'" d="M9.4 6.2l5.6 5.8-5.6 5.8" />
     <path v-else-if="name === 'chevron-down'" d="M6.2 9.4l5.8 5.6 5.8-5.6" />
     <path v-else-if="name === 'close'" d="M6.2 6.2l11.6 11.6M17.8 6.2L6.2 17.8" />
+    <path
+      v-else-if="name === 'expand'"
+      d="M4.8 9.2V4.8h4.4M19.2 9.2V4.8h-4.4M4.8 14.8v4.4h4.4M19.2 14.8v4.4h-4.4"
+    />
+    <path
+      v-else-if="name === 'compress'"
+      d="M9.2 4.8v4.4H4.8M14.8 4.8v4.4h4.4M9.2 19.2v-4.4H4.8M14.8 19.2v-4.4h4.4"
+    />
     <template v-else-if="name === 'more'">
       <circle cx="12" cy="5.4" r="1.5" fill="currentColor" stroke="none" />
       <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
@@ -149,6 +157,11 @@ withDefaults(
       <path d="M7.2 11.4h4.2M13.6 11.4h3.2M7.2 14.6h8.4" />
     </template>
     <path v-else-if="name === 'sort-down'" d="M7 4.6v14.8M3.8 16l3.2 3.4 3.2-3.4M14 5.4h6.2M14 10.4h4.6M14 15.4h3" />
+    <!-- 播放锁: padlock -->
+    <template v-else-if="name === 'lock'">
+      <rect x="5" y="10.6" width="14" height="9.4" rx="2.2" />
+      <path d="M8.2 10.6V7.8a3.8 3.8 0 017.6 0v2.8" />
+    </template>
     <!-- 定时关闭: clock -->
     <template v-else-if="name === 'timer'">
       <circle cx="12" cy="12" r="8.2" />

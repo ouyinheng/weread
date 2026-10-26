@@ -7,6 +7,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from '@/components/Icon.vue'
+import MorphIcon from '@/components/MorphIcon.vue'
 import type { ListenStatus } from '@/audio/player'
 
 const props = defineProps<{
@@ -40,6 +41,7 @@ let moved = false
 let suppressClick = false
 
 const playing = computed(() => props.status === 'playing')
+const buffering = computed(() => props.status === 'buffering')
 const unavailable = computed(() => props.status === 'unavailable')
 
 function clamp(v: number, min: number, max: number): number {
@@ -194,11 +196,12 @@ function onCoverError(e: Event): void {
 
     <button
       class="mini__btn"
-      :aria-label="playing ? '暂停' : '播放'"
+      :aria-label="buffering ? '取消准备' : playing ? '暂停' : '播放'"
       :disabled="unavailable"
       @click="emit('toggle')"
     >
-      <Icon :name="playing ? 'pause' : 'play'" :size="18" :width="1.9" />
+      <span v-if="buffering" class="mini__spinner" aria-hidden="true" />
+      <MorphIcon v-else :name="playing ? 'pause' : 'play'" :size="18" :width="1.9" />
     </button>
     <button class="mini__btn" aria-label="退出听书" @click="emit('close')">
       <Icon name="close" :size="16" :width="1.9" />
@@ -299,6 +302,24 @@ function onCoverError(e: Event): void {
 
 .mini__btn:active {
   background: rgba(255, 255, 255, 0.12);
+}
+
+/* 在线音色准备本章音频时，播放键位置转圈（和全屏页同一个状态）。 */
+.mini__spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.6px solid rgba(243, 244, 234, 0.22);
+  border-top-color: #f3f4ea;
+  animation: miniSpin 720ms linear infinite;
+}
+
+@keyframes miniSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mini__spinner { animation-duration: 2s; }
 }
 
 .mini__btn:disabled {

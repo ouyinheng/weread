@@ -12,6 +12,9 @@ import { pickAndImport } from '@/utils/importer'
 import { confirmDialog } from '@/utils/dialog'
 import { uiState } from '@/utils/ui-state'
 
+// 组件名对上 App.vue 的 keep-alive include，tab 页面才不会一返回就整页重建。
+defineOptions({ name: 'shelf' })
+
 /** In-flight open animation; cancelled if the user taps another book. */
 let openAnim: SharedElementHandle | null = null
 

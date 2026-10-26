@@ -98,9 +98,10 @@ export function useListenPlayer(deps: PlayerDeps) {
 
     const voice = deps.settings().voice || undefined
     /*
-     * The phone's own engine queues `QUEUE_ADD`, and the web engine queues on
-     * its own; both let us prepare the next sentence while the current one is
-     * still playing. Edge is one-shot, so it stays sequential.
+     * Every engine we ship accepts a queued sentence: the phone's own engine
+     * uses QUEUE_ADD, the web engine has its own queue, and the online engine
+     * synthesises the next sentence in the background. Asking ahead is what
+     * removes the silent gap at each paragraph boundary.
      */
     const lookahead = e.canLookahead?.(voice) === true
     const queued = new Map<number, Promise<void>>()

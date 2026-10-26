@@ -370,9 +370,9 @@ async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
 
   return {
     kind: 'native',
-    // One sentence per WebSocket: speaking the next one cancels the current,
-    // so the player must stay strictly sequential here.
-    canLookahead: () => false,
+    // The native side keeps two sentences in flight: the next one synthesises
+    // while the current one plays, so the player can ask ahead.
+    canLookahead: () => true,
     async speak(text, rate, voice) {
       const curated = EDGE_VOICES.find(v => v.id === voice) || EDGE_VOICES[0]
       const { utteranceId, queued } = await plugin.speak({
@@ -414,10 +414,11 @@ function compositeEngine(system: TtsEngine, edge: TtsEngine): TtsEngine {
   return {
     kind: 'native',
     canLookahead(voice) {
-      // Online voices are one-shot per sentence; only the on-device engine can
-      // queue a second sentence behind the current one.
-      if (isOnline(voice)) return false
-      return system.kind !== 'none' && system.canLookahead?.(voice) === true
+      // Online voices synthesise ahead on the native queue; on-device voices
+      // queue with QUEUE_ADD. Both accept one sentence in advance.
+      if (isOnline(voice)) return edge.canLookahead?.(voice) === true
+      if (system.kind === 'none') return edge.canLookahead?.(voice) === true
+      return system.canLookahead?.(voice) === true
     },
     speak(text, rate, voice) {
       if (isOnline(voice)) return edge.speak(text, rate, voice)

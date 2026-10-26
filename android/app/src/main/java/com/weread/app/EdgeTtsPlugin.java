@@ -16,7 +16,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -39,11 +41,12 @@ import okio.ByteString;
  * mode sound human. Everything is still spoken through the same event contract
  * as {@link TtsPlugin}, so the JS player does not care which engine ran.
  *
- * One sentence per WebSocket: the endpoint takes SSML, streams MP3 frames back
- * and ends the turn with `Path:turn.end`. The plugin buffers those frames,
- * writes one temp file per sentence and hands it to MediaPlayer. A sentence
- * lives for a few seconds, so the extra handshake is cheaper than keeping a
- * socket alive through pauses and chapter jumps.
+ * One WebSocket per sentence, but **two sentences are in flight**: while
+ * sentence N is playing, sentence N+1 is already being synthesised into its own
+ * temp file. The JS player asks one sentence ahead, so the next file is ready
+ * when the current one ends and playback starts immediately instead of waiting
+ * for a fresh network round trip. That wait was the long pause at every
+ * paragraph boundary.
  *
  * Failure is deliberately noisy: if the network is down the JS layer switches
  * to the system voice or shows an error, rather than pretending to play.
@@ -74,15 +77,38 @@ public class EdgeTtsPlugin extends Plugin {
             .build();
     private final Handler handler = new Handler(Looper.getMainLooper());
 
-    /** Identifies the sentence whose callbacks are still allowed to act. */
-    private String activeId;
-    /** Bumped on every retry so late frames from an old socket are ignored. */
-    private int currentAttempt;
-    private WebSocket socket;
-    private ByteArrayOutputStream buffer;
+    /** One sentence: its socket, audio buffer and temp file. */
+    private static final class Job {
+        final String id;
+        final String text;
+        final String voice;
+        final String pitch;
+        final double rate;
+        final int session;
+        final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        WebSocket socket;
+        File file;
+        volatile int attempt;
+        boolean started;
+        boolean ready;
+        Runnable timeout;
+
+        Job(String id, String text, String voice, String pitch, double rate, int session) {
+            this.id = id;
+            this.text = text;
+            this.voice = voice;
+            this.pitch = pitch;
+            this.rate = rate;
+            this.session = session;
+        }
+    }
+
+    /** Queued sentences, head first. Mutated on the main thread only. */
+    private final List<Job> queue = new ArrayList<>();
     private MediaPlayer player;
-    private File tempFile;
-    private Runnable timeoutTask;
+    private Job playing;
+    /** Bumped on stop so late socket callbacks can tell they are stale. */
+    private volatile int session;
 
     /** Always available; network health is judged when a sentence is spoken. */
     @PluginMethod
@@ -105,36 +131,71 @@ public class EdgeTtsPlugin extends Plugin {
             call.reject("empty-text");
             return;
         }
-        String voice = call.getString("voice", "zh-CN-XiaoxiaoNeural");
-        String pitch = call.getString("pitch", "+0Hz");
-        double rate = call.getDouble("rate", 1.0);
-
-        stopInternal();
-
+        final String voice = call.getString("voice", "zh-CN-XiaoxiaoNeural");
+        final String pitch = call.getString("pitch", "+0Hz");
+        final double rate = call.getDouble("rate", 1.0);
         final String utteranceId = UUID.randomUUID().toString();
-        synchronized (this) {
-            activeId = utteranceId;
-            buffer = new ByteArrayOutputStream();
-            currentAttempt = 0;
-        }
-        connect(utteranceId, text, voice, pitch, rate, 0);
-
-        timeoutTask = () -> fail(utteranceId, "timeout");
-        handler.postDelayed(timeoutTask, SYNTH_TIMEOUT_MS);
 
         JSObject out = new JSObject();
         out.put("utteranceId", utteranceId);
         out.put("queued", true);
         call.resolve(out);
+
+        // Queue on the main thread so speak()/stop() are strictly ordered.
+        handler.post(() -> {
+            Job job = new Job(utteranceId, text, voice, pitch, rate, session);
+            queue.add(job);
+            pump();
+        });
     }
 
-    private void connect(
-            String utteranceId, String text, String voice,
-            String pitch, double rate, int attempt
-    ) {
-        synchronized (this) {
-            currentAttempt = attempt;
+    @PluginMethod
+    public void stop(PluginCall call) {
+        handler.post(this::stopInternal);
+        call.resolve();
+    }
+
+    private void stopInternal() {
+        session++;
+        List<Job> jobs = new ArrayList<>(queue);
+        queue.clear();
+        playing = null;
+        for (Job job : jobs) cancelJob(job);
+        releasePlayer();
+    }
+
+    /**
+     * Keep the head playing and the next sentence synthesising. Called on the
+     * main thread after every queue/playback transition.
+     */
+    private void pump() {
+        if (queue.isEmpty()) return;
+
+        Job head = queue.get(0);
+        if (!head.started) startSynthesis(head);
+
+        if (queue.size() > 1) {
+            Job next = queue.get(1);
+            if (!next.started) startSynthesis(next);
         }
+
+        if (playing == null && head.ready) playHead(head);
+    }
+
+    private void startSynthesis(Job job) {
+        job.started = true;
+        job.attempt = 0;
+        job.timeout = () -> fail(job, "timeout");
+        handler.postDelayed(job.timeout, SYNTH_TIMEOUT_MS);
+        connect(job);
+    }
+
+    private void connect(Job job) {
+        if (!isCurrent(job)) return;
+
+        WebSocket old = job.socket;
+        if (old != null) old.cancel();
+
         String url = WSS_URL
                 + "?TrustedClientToken=" + TRUSTED_CLIENT_TOKEN
                 + "&Sec-MS-GEC=" + EdgeDrm.generateSecMsGec()
@@ -150,55 +211,47 @@ public class EdgeTtsPlugin extends Plugin {
                 .header("Cookie", "muid=" + muid() + ";")
                 .build();
 
-        WebSocket ws = client.newWebSocket(
+        job.socket = client.newWebSocket(
                 request,
-                new Listener(
-                        utteranceId,
-                        UUID.randomUUID().toString().replace("-", ""),
-                        text, voice, pitch, rate, attempt
-                )
+                new Listener(job, job.attempt, UUID.randomUUID().toString().replace("-", ""))
         );
-        synchronized (this) {
-            socket = ws;
-        }
     }
 
     private static String muid() {
         return UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT);
     }
 
-    @PluginMethod
-    public void stop(PluginCall call) {
-        stopInternal();
-        call.resolve();
+    /** Main-thread check: this job belongs to the current run and is still queued. */
+    private boolean isCurrent(Job job) {
+        return job.session == session && queue.contains(job);
     }
 
-    private void stopInternal() {
-        synchronized (this) {
-            activeId = null;
-        }
-        releaseResources();
+    /** Off-main-thread check: the run and the connection attempt are both current. */
+    private boolean isLive(Job job, int attempt) {
+        return job.session == session && job.attempt == attempt;
     }
 
-    /** Drop socket, player and temp file without emitting any event. */
-    private void releaseResources() {
-        Runnable timeout = timeoutTask;
-        timeoutTask = null;
-        if (timeout != null) handler.removeCallbacks(timeout);
-
-        WebSocket ws;
-        MediaPlayer mp;
-        File file;
-        synchronized (this) {
-            ws = socket;
-            socket = null;
-            mp = player;
-            player = null;
-            file = tempFile;
-            tempFile = null;
-            buffer = null;
-        }
+    private void cancelJob(Job job) {
+        clearTimeout(job);
+        WebSocket ws = job.socket;
+        job.socket = null;
         if (ws != null) ws.cancel();
+        if (job.file != null) {
+            job.file.delete();
+            job.file = null;
+        }
+        job.ready = false;
+    }
+
+    private void clearTimeout(Job job) {
+        Runnable timeout = job.timeout;
+        job.timeout = null;
+        if (timeout != null) handler.removeCallbacks(timeout);
+    }
+
+    private void releasePlayer() {
+        MediaPlayer mp = player;
+        player = null;
         if (mp != null) {
             try {
                 mp.stop();
@@ -207,35 +260,133 @@ public class EdgeTtsPlugin extends Plugin {
             }
             mp.release();
         }
-        if (file != null) file.delete();
     }
 
-    private boolean isActive(String id) {
-        synchronized (this) {
-            return id.equals(activeId);
+    private void fail(Job job, String reason) {
+        if (!isCurrent(job)) return;
+        queue.remove(job);
+        if (playing == job) {
+            playing = null;
+            releasePlayer();
+        }
+        cancelJob(job);
+        notifyError(job.id, reason);
+        pump();
+    }
+
+    private void onTurnEnd(Job job, int attempt) {
+        if (!isCurrent(job) || job.attempt != attempt) return;
+
+        byte[] audio;
+        synchronized (job.buffer) {
+            audio = job.buffer.toByteArray();
+            job.buffer.reset();
+        }
+        if (audio.length == 0) {
+            fail(job, "empty-audio");
+            return;
+        }
+        try {
+            File file = new File(getContext().getCacheDir(), "edge-tts-" + job.id + ".mp3");
+            FileOutputStream out = new FileOutputStream(file);
+            out.write(audio);
+            out.close();
+            job.file = file;
+            job.ready = true;
+            clearTimeout(job);
+            pump();
+        } catch (Exception e) {
+            fail(job, "write");
         }
     }
 
-    private void fail(String id, String reason) {
-        synchronized (this) {
-            if (!id.equals(activeId)) return;
-            activeId = null;
+    private void playHead(Job job) {
+        if (playing != null || !isCurrent(job) || !job.ready || job.file == null) return;
+        playing = job;
+
+        try {
+            MediaPlayer mp = new MediaPlayer();
+            mp.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build());
+            mp.setDataSource(job.file.getAbsolutePath());
+            mp.setOnPreparedListener(p -> {
+                if (playing != job || !isCurrent(job)) {
+                    if (player == p) player = null;
+                    p.release();
+                    return;
+                }
+                notifyStart(job.id);
+                p.start();
+            });
+            mp.setOnCompletionListener(p -> handler.post(() -> finish(job, p)));
+            mp.setOnErrorListener((p, what, extra) -> {
+                fail(job, "playback");
+                return true;
+            });
+            player = mp;
+            mp.prepareAsync();
+        } catch (Exception e) {
+            playing = null;
+            fail(job, "playback");
         }
-        /*
-         * MediaPlayer must be released on the thread that created it. A new
-         * sentence may already have claimed the plugin by the time this runs,
-         * so only clean up when nothing newer is active — `speak` releases the
-         * old player itself before starting.
-         */
-        handler.post(() -> {
-            synchronized (EdgeTtsPlugin.this) {
-                if (activeId == null) releaseResources();
+    }
+
+    private void finish(Job job, MediaPlayer mp) {
+        if (playing != job) {
+            if (player == mp) player = null;
+            try {
+                mp.release();
+            } catch (Exception ignored) {
+                // Already released.
             }
-            JSObject data = new JSObject();
-            data.put("utteranceId", id);
-            data.put("reason", reason);
-            notifyListeners("onError", data, true);
-        });
+            return;
+        }
+        playing = null;
+        if (player == mp) player = null;
+        try {
+            mp.release();
+        } catch (Exception ignored) {
+            // Already released.
+        }
+        queue.remove(job);
+        job.ready = false;
+        if (job.file != null) {
+            job.file.delete();
+            job.file = null;
+        }
+        notifyDone(job.id);
+        pump();
+    }
+
+    private void appendAudio(Job job, byte[] data, int attempt) {
+        if (data.length < 2) return;
+        int headerLength = ((data[0] & 0xFF) << 8) | (data[1] & 0xFF);
+        if (data.length < 2 + headerLength) return;
+        String header = new String(data, 2, headerLength, StandardCharsets.UTF_8);
+        if (!header.contains("Path:audio")) return;
+        synchronized (job.buffer) {
+            if (job.attempt == attempt) {
+                job.buffer.write(data, 2 + headerLength, data.length - 2 - headerLength);
+            }
+        }
+    }
+
+    private void retryOrFail(Job job, int attempt, String reason) {
+        if (!isCurrent(job) || job.attempt != attempt) return;
+        if (attempt + 1 >= MAX_ATTEMPTS) {
+            fail(job, reason);
+            return;
+        }
+        job.attempt = attempt + 1;
+        synchronized (job.buffer) {
+            job.buffer.reset();
+        }
+        WebSocket old = job.socket;
+        job.socket = null;
+        if (old != null) old.cancel();
+        connect(job);
     }
 
     private void notifyStart(String id) {
@@ -248,6 +399,13 @@ public class EdgeTtsPlugin extends Plugin {
         JSObject data = new JSObject();
         data.put("utteranceId", id);
         notifyListeners("onDone", data, true);
+    }
+
+    private void notifyError(String id, String reason) {
+        JSObject data = new JSObject();
+        data.put("utteranceId", id);
+        data.put("reason", reason);
+        notifyListeners("onError", data, true);
     }
 
     private static String dateHeader() {
@@ -304,154 +462,54 @@ public class EdgeTtsPlugin extends Plugin {
                 .replace("'", "&apos;");
     }
 
-    /** Split the 2-byte big-endian header length off a binary frame. */
-    private void appendAudio(byte[] data) {
-        if (data.length < 2) return;
-        int headerLength = ((data[0] & 0xFF) << 8) | (data[1] & 0xFF);
-        if (data.length < 2 + headerLength) return;
-        String header = new String(data, 2, headerLength, StandardCharsets.UTF_8);
-        if (!header.contains("Path:audio")) return;
-        synchronized (this) {
-            if (buffer != null) {
-                buffer.write(data, 2 + headerLength, data.length - 2 - headerLength);
-            }
-        }
-    }
-
-    private void onTurnEnd(String id, int attempt) {
-        byte[] audio;
-        synchronized (this) {
-            if (!id.equals(activeId) || attempt != currentAttempt) return;
-            audio = buffer == null ? new byte[0] : buffer.toByteArray();
-            buffer = null;
-        }
-        if (audio.length == 0) {
-            fail(id, "empty-audio");
-            return;
-        }
-        try {
-            File file = new File(getContext().getCacheDir(), "edge-tts-" + id + ".mp3");
-            FileOutputStream out = new FileOutputStream(file);
-            out.write(audio);
-            out.close();
-            handler.post(() -> play(id, file));
-        } catch (Exception e) {
-            fail(id, "write");
-        }
-    }
-
-    private void play(String id, File file) {
-        if (!isActive(id)) {
-            file.delete();
-            return;
-        }
-        try {
-            MediaPlayer mp = new MediaPlayer();
-            mp.setAudioAttributes(new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build());
-            mp.setDataSource(file.getAbsolutePath());
-            mp.setOnPreparedListener(p -> {
-                if (!isActive(id)) {
-                    p.release();
-                    file.delete();
-                    return;
-                }
-                notifyStart(id);
-                p.start();
-            });
-            mp.setOnCompletionListener(p -> {
-                if (isActive(id)) {
-                    synchronized (EdgeTtsPlugin.this) {
-                        activeId = null;
-                    }
-                    releaseResources();
-                    notifyDone(id);
-                } else {
-                    p.release();
-                    file.delete();
-                }
-            });
-            mp.setOnErrorListener((p, what, extra) -> {
-                fail(id, "playback");
-                return true;
-            });
-            synchronized (this) {
-                player = mp;
-                tempFile = file;
-            }
-            mp.prepareAsync();
-        } catch (Exception e) {
-            fail(id, "playback");
-        }
-    }
-
     @Override
     protected void handleOnDestroy() {
-        stopInternal();
+        handler.post(this::stopInternal);
         super.handleOnDestroy();
     }
 
     private final class Listener extends WebSocketListener {
-        private final String utteranceId;
-        private final String requestId;
-        private final String text;
-        private final String voice;
-        private final String pitch;
-        private final double rate;
+        private final Job job;
         private final int attempt;
+        private final String requestId;
         /** Set once turn.end arrived, so the server closing is not an error. */
         private volatile boolean complete = false;
 
-        Listener(
-                String utteranceId, String requestId, String text,
-                String voice, String pitch, double rate, int attempt
-        ) {
-            this.utteranceId = utteranceId;
-            this.requestId = requestId;
-            this.text = text;
-            this.voice = voice;
-            this.pitch = pitch;
-            this.rate = rate;
+        Listener(Job job, int attempt, String requestId) {
+            this.job = job;
             this.attempt = attempt;
-        }
-
-        /** A callback only acts if its sentence and attempt are still current. */
-        private boolean isCurrent() {
-            synchronized (EdgeTtsPlugin.this) {
-                return utteranceId.equals(activeId) && attempt == currentAttempt;
-            }
+            this.requestId = requestId;
         }
 
         @Override
         public void onOpen(WebSocket webSocket, Response response) {
-            if (!isCurrent()) {
+            if (!isLive(job, attempt)) {
                 webSocket.cancel();
                 return;
             }
             webSocket.send(configMessage());
-            webSocket.send(ssmlMessage(requestId, text, voice, pitch, rate));
+            webSocket.send(ssmlMessage(requestId, job.text, job.voice, job.pitch, job.rate));
         }
 
         @Override
         public void onMessage(WebSocket webSocket, String message) {
-            if (!isCurrent()) return;
+            if (!isLive(job, attempt)) return;
             if (message != null && message.contains("Path:turn.end")) {
                 complete = true;
-                onTurnEnd(utteranceId, attempt);
+                handler.post(() -> onTurnEnd(job, attempt));
             }
         }
 
         @Override
         public void onMessage(WebSocket webSocket, ByteString bytes) {
-            if (!isCurrent()) return;
-            appendAudio(bytes.toByteArray());
+            if (!isLive(job, attempt)) return;
+            appendAudio(job, bytes.toByteArray(), attempt);
         }
 
         @Override
         public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-            if (!complete) retryOrFail("network");
+            if (complete) return;
+            handler.post(() -> retryOrFail(job, attempt, "network"));
         }
 
         @Override
@@ -459,23 +517,10 @@ public class EdgeTtsPlugin extends Plugin {
             if (complete) return;
             if (code == 1003 || code == 1007 || code == 1008) {
                 // Malformed or unacceptable payload: the same SSML will fail again.
-                fail(utteranceId, "closed");
+                handler.post(() -> fail(job, "closed"));
             } else {
-                retryOrFail("closed");
+                handler.post(() -> retryOrFail(job, attempt, "closed"));
             }
-        }
-
-        private void retryOrFail(String reason) {
-            if (!isCurrent()) return;
-            if (attempt + 1 >= MAX_ATTEMPTS) {
-                fail(utteranceId, reason);
-                return;
-            }
-            // Partial audio from the failed attempt must not join the retry.
-            synchronized (EdgeTtsPlugin.this) {
-                buffer = new ByteArrayOutputStream();
-            }
-            connect(utteranceId, text, voice, pitch, rate, attempt + 1);
         }
     }
 }

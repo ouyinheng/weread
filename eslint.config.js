@@ -11,7 +11,12 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
-      globals: { ...globals.browser, ...globals.node },
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        // 构建期由 vite.config.ts 的 define 注入，不是运行时变量
+        __APP_VERSION__: 'readonly',
+      },
     },
   },
   js.configs.recommended,

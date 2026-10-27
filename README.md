@@ -83,14 +83,49 @@ npm run preview
 
 ### 构建 Android APK
 
+版本号只有一个来源：`package.json` 的 `version`。Gradle 读它生成 `versionName`，
+并按 `major*10000 + minor*100 + patch` 推出单调递增的 `versionCode`；前端也由 Vite
+注入同一个值，所以设置页「关于」里显示的版本和安装包信息永远一致。**发版只需要改
+`package.json` 一处。**
+
+先准备发布签名（只需一次）：
+
+```bash
+keytool -genkeypair -v -keystore android/weread-release.jks -alias weread \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
+然后在 `android/keystore.properties` 里写上口令（该文件与 jks 都在 `.gitignore` 里，
+不会入库）：
+
+```properties
+storeFile=weread-release.jks
+storePassword=<刚才设的口令>
+keyAlias=weread
+keyPassword=<刚才设的口令>
+```
+
+构建正式包：
+
 ```bash
 npm run build
 ./node_modules/.bin/capacitor sync android
 cd android
-./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
-产物：`android/app/build/outputs/apk/debug/app-debug.apk`。
+产物：`android/app/build/outputs/apk/release/app-release.apk`。
+
+核对一下再发：
+
+```bash
+$ANDROID_HOME/build-tools/35.0.0/aapt2 dump badging app-release.apk | head -1
+$ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs app-release.apk
+```
+
+**没有 `keystore.properties` 时 release 变体不签名，装不上**——这是有意的，避免把
+一个调试密钥签的包当成正式版发出去。日常联调用 `./gradlew assembleDebug`，产物在
+`build/outputs/apk/debug/`。
 
 Android 构建需要 JDK 21 和本机 Android SDK；SDK 路径写在 `android/local.properties`（该文件不入库）。
 

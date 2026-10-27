@@ -1,12 +1,11 @@
 import { parseEpub } from '../src/utils/parser.ts'
-import { readFileSync } from 'fs'
+import { makeEpubBuffer } from './fixtures.mjs'
 
 let fail = 0
 const check = (n, cond, extra='') => { console.log(cond?'ok  ':'FAIL', n, cond?'':extra); if(!cond) fail++ }
 
-const path = '/Users/ouyinheng/Documents/GitHub/weread/docs/evidence/epub/pg79784-images-3.epub'
-const buf = readFileSync(path)
-const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+// 合成 EPUB3（书名/作者/封面/章内图都有），不再读仓库外的真书
+const ab = await makeEpubBuffer()
 
 const book = await parseEpub(ab, 'little-black-quibba.epub')
 console.log('title:', book.title)

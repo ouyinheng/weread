@@ -1,7 +1,7 @@
 // A parser upgrade must be able to rebuild already-imported books, otherwise
 // users keep broken markup from older parses forever.
 import 'fake-indexeddb/auto'
-import { readFileSync } from 'fs'
+import { makeEpubBuffer } from './fixtures.mjs'
 import { dbPut, dbPutMany, dbGet, dbGetAll } from '../src/utils/db.ts'
 import { PARSER_VERSION, parseEpub } from '../src/utils/parser.ts'
 import { saveSourceFile, loadSourceFile, rebuildBook, needsRebuild } from '../src/utils/library.ts'
@@ -12,9 +12,7 @@ const check = (name, cond, extra = '') => {
   if (!cond) fail++
 }
 
-const EPUB = '/Users/ouyinheng/Documents/GitHub/weread/docs/evidence/epub/pg79784-images-3.epub'
-const bytes = readFileSync(EPUB)
-const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+const ab = await makeEpubBuffer()
 
 /* ---------- needsRebuild ---------- */
 check('legacy book needs rebuild', needsRebuild({ parserVersion: undefined }), '')

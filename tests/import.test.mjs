@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { readFileSync } from 'fs'
+import { makeTxtBuffer } from './fixtures.mjs'
 import { parseTxt } from './src/utils/parser.ts'
 import { dbPut, dbPutMany, dbGetAll, dbDeleteByIndex } from './src/utils/db.ts'
 
@@ -9,8 +9,8 @@ const check = (name, cond, extra='') => {
   if (!cond) fail++
 }
 
-const buf = readFileSync('/Users/ouyinheng/Documents/GitHub/weread/docs/evidence/测试书籍/第五形态.txt')
-const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+// 合成样本：上千章、上百万字，和原来那本真书的规模一致，但不依赖仓库外的文件
+const ab = makeTxtBuffer()
 const t0 = Date.now()
 const parsed = await parseTxt(ab, '第五形态.txt')
 const parseMs = Date.now() - t0

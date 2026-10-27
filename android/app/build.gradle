@@ -1,5 +1,33 @@
 apply plugin: 'com.android.application'
 
+/*
+ * 版本号的唯一来源是 package.json —— vite 也读同一份，设置页显示的版本号
+ * 和安装包的 versionName 因此永远一致。
+ *
+ * versionCode 由 semver 推出来（major*10000 + minor*100 + patch），单调递增，
+ * 系统才会把它当成「升级」而不是拒绝安装。
+ */
+def pkgFile = file('../../package.json')
+def pkg = new groovy.json.JsonSlurper().parseText(pkgFile.text)
+def semver = (pkg.version ?: '0.0.0').tokenize('.')
+def vMajor = semver[0] as int
+def vMinor = semver.size() > 1 ? semver[1] as int : 0
+def vPatch = semver.size() > 2 ? (semver[2] as int) : 0
+def appVersionName = "${vMajor}.${vMinor}.${vPatch}"
+def appVersionCode = vMajor * 10000 + vMinor * 100 + vPatch
+
+/*
+ * 发布签名。口令放在 android/keystore.properties（不入库）。
+ *
+ * 没有这个文件时 release 变体不配置签名，assembleRelease 出来的包装不上 ——
+ * 这是有意的：宁可构建失败，也不要让人把一个调试密钥签的包当正式版发出去。
+ */
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
     namespace = "com.weread.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +35,8 @@ android {
         applicationId "com.weread.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +44,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

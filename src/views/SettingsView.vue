@@ -52,7 +52,7 @@ function saveFontScale(): void {
   void appSettings.update({ fontScale: appSettings.app.fontScale })
 }
 
-const appVersion = '1.0.0'
+const appVersion = __APP_VERSION__
 /** 阅读设置只改阅读页；系统设置才会作用于整个应用。 */
 const SETTINGS_TABS = [
   { id: 'reading', label: '阅读' },

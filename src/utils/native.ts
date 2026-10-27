@@ -62,6 +62,8 @@ export interface StatusBarOptions {
  */
 interface SystemBarsBridge {
   setLight?: (light: boolean) => void
+  /** 状态栏底色（`#rrggbb`）。页面通过 window 拿到的是 -1 时说明没生效。 */
+  setBackground?: (hex: string) => void
   /** JSON `{ top, bottom }` in CSS px (dp), already divided by density. */
   getInsets?: () => string
   /** The device's font-size setting (1 = default). */
@@ -121,6 +123,21 @@ function bars(): SystemBarsBridge | undefined {
 }
 
 /**
+ * Re-read the window insets after the system bars came back.
+ *
+ * `--statusbar-height` is pushed into CSS from the native inset read. While a
+ * fullscreen view covers the window the bars are hidden and that read is 0, so
+ * anything that shows them again has to re-publish the real value — otherwise
+ * page headers keep the top padding of a bar-less window.
+ */
+export function refreshSafeArea(): void {
+  if (!isNativeShell()) return
+  const insets = nativeInsets()
+  setPx('--statusbar-height', insets.top)
+  setPx('--nav-inset', insets.bottom)
+}
+
+/**
  * System-bar insets in CSS px.
  *
  * The WebView never reports these to CSS (`env(safe-area-inset-top)` is 0 on
@@ -177,6 +194,22 @@ function setPx(name: string, value: number) {
  * report their sizes back to CSS as `--statusbar-height` / `--nav-inset` so page
  * headers and the tab bar can keep clear of them. No-op on the web.
  */
+/**
+ * Paint the status bar with the page's own surface colour.
+ *
+ * The WebView does not extend under the system bars on every device/OEM combo
+ * (this emulator is one), so the strip above the page is the *window*
+ * background — white. On a dark page that leaves a white band with white
+ * clock/battery icons on it.
+ */
+export async function applyStatusBarBackground(hex: string): Promise<void> {
+  try {
+    bars()?.setBackground?.(hex)
+  } catch {
+    /* bridge not injected */
+  }
+}
+
 export async function applyStatusBarStyle(opts: StatusBarOptions): Promise<void> {
   // Native bridge installed by MainActivity: flips status + navigation bar icon
   // colours. `light` background ⇒ dark icons. Harmless when absent (web).

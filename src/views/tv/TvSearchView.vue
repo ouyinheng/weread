@@ -80,6 +80,8 @@ function clearRecent() {
 async function run(word?: string) {
   const q = String(word ?? keyword.value).trim()
   if (!q || searching.value) return
+  // 搜完要收键盘：结果就在下面，键盘占着半屏，人还得先手动收。
+  inputEl.value?.blur()
   keyword.value = q
   if (!store.enabledSources.length) {
     error.value = '还没有启用任何源，先到「源管理」添加'
@@ -355,7 +357,7 @@ function metaOf(item: TvItem): string {
   padding: 6px 13px;
   background: var(--bg-secondary);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -438,11 +440,13 @@ function metaOf(item: TvItem): string {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* 预留两行：一行标题和两行标题的卡片，副标题要能对齐。 */
+  min-height: 2.7em;
 }
 .tv-card__meta {
   display: block;
   margin-top: 2px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;

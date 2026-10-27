@@ -158,7 +158,7 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 12px;
   padding: 0 16px 8px;
-  font-size: calc(11.5px * var(--app-font-scale));
+  font-size: calc(12px * var(--app-font-scale));
   color: var(--text-secondary);
   flex-shrink: 0;
 }

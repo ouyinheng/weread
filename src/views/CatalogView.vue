@@ -55,14 +55,14 @@ async function removeBookmark(id: string) {
 <template>
   <div class="catalog-page">
     <header class="catalog-header">
-      <button class="catalog-back" @click="router.back()">
+      <button class="catalog-back tap-target" @click="router.back()">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <div class="catalog-tabs">
         <button
           v-for="t in tabs"
           :key="t.key"
-          class="catalog-tab"
+          class="catalog-tab tap-target"
           :class="{ active: activeTab === t.key }"
           @click="activeTab = t.key"
         >{{ t.label }}</button>
@@ -176,12 +176,17 @@ async function removeBookmark(id: string) {
   align-items: center;
   gap: 6px;
   margin: 0 16px 8px;
-  padding: 8px 14px;
+  /* 44px field: the input inside was a 16px band, so most of the pill did not
+     focus the field when tapped. */
+  min-height: 44px;
+  padding: 0 14px;
   background: var(--bg-secondary);
-  border-radius: 18px;
+  border-radius: 22px;
 }
 .catalog-search input {
   flex: 1;
+  /* Stretch to the pill's full height so the whole field is tappable. */
+  align-self: stretch;
   font-size: calc(13px * var(--app-font-scale));
 }
 .catalog-body {

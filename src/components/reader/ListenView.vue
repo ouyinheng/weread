@@ -215,16 +215,9 @@ watch(sheet, (v) => {
         <span class="lv__action-icon"><Icon name="headphones" :size="22" /></span>
         <span class="lv__action-text">音色</span>
       </button>
-      <button class="lv__action" @click="openSheet('timer')">
-        <span class="lv__action-icon" :class="{ 'lv__action-icon--on': timerLeft > 0 }">
-          <Icon name="timer" :size="22" />
-        </span>
-        <span class="lv__action-text" :class="{ 'lv__action-text--on': timerLeft > 0 }">{{ timerText }}</span>
-      </button>
-      <button class="lv__action" @click="openSheet('more')">
-        <span class="lv__action-icon"><Icon name="more" :size="22" /></span>
-        <span class="lv__action-text">更多</span>
-      </button>
+      <!-- 定时 lives in the transport row (it is a playback control, and the row
+           below is where playback lives). 更多 lives in the header ⋮. Having
+           both in two places made the screen look like it had two of each. -->
     </nav>
 
     <section class="lv__progress">
@@ -603,7 +596,7 @@ watch(sheet, (v) => {
 
 .lv__actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: space-around;
   padding: 4px 2px 10px;
   flex-shrink: 0;
 }

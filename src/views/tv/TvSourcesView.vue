@@ -118,7 +118,7 @@ function doImport(): void {
       <button class="tv-src__back" aria-label="返回" @click="router.back()">
         <Icon name="back" :size="22" :width="2" />
       </button>
-      <span class="tv-src__title">源管理</span>
+      <span class="tv-src__title">视频源管理</span>
       <button class="tv-src__import-btn" @click="showImport = !showImport">
         {{ showImport ? '收起' : '导入' }}
       </button>
@@ -241,7 +241,7 @@ function doImport(): void {
   padding: 8px 10px;
   border-radius: 8px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
   font-size: 12px;
 }
 
@@ -281,7 +281,7 @@ function doImport(): void {
   border: 0;
   border-radius: 8px;
   background: var(--accent);
-  color: var(--text-inverse);
+  color: var(--on-accent);
   font-size: 14px;
   font-family: inherit;
 }

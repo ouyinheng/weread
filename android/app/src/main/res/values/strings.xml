@@ -4,4 +4,14 @@
     <string name="title_activity_main">微读</string>
     <string name="package_name">com.weread.app</string>
     <string name="custom_url_scheme">com.weread.app</string>
+
+    <!-- 听书常驻通知 -->
+    <string name="listen_channel_name">听书</string>
+    <string name="listen_channel_desc">听书时在通知栏显示播放控制</string>
+    <string name="listen_fallback_title">听书</string>
+    <string name="listen_fallback_text">正在朗读</string>
+    <string name="listen_notice">听书中</string>
+    <string name="listen_action_play">继续</string>
+    <string name="listen_action_pause">暂停</string>
+    <string name="listen_action_close">关闭</string>
 </resources>

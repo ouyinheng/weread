@@ -11,9 +11,13 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.KeyEvent;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
 
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -21,7 +25,9 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
+import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.BridgeWebChromeClient;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -62,15 +68,105 @@ public class MainActivity extends BridgeActivity {
      */
     private volatile boolean volumeKeysEnabled = false;
 
+    /**
+     * 正在全屏渲染的视图。
+     *
+     * HTML5 全屏（`element.requestFullscreen()`，包括 artplayer 的那个按钮）
+     * 在 WebView 里不走窗口，而是把全屏元素交给 `WebChromeClient`
+     * `.onShowCustomView()`，由宿主把它盖到界面上、并自己处理状态栏和转屏。
+     *
+     * Capacitor 的实现是**直接取消**：`BridgeWebChromeClient.onShowCustomView()`
+     * 第一句就是 `callback.onCustomViewHidden()`，所以页面上任何
+     * `requestFullscreen()` 都静默失败 —— 之前播放页只能退回「CSS 铺满」，
+     * 状态栏还在，也就不是真全屏。这里换成真正实现它的子类。
+     */
+    private View fullscreenView;
+    private WebChromeClient.CustomViewCallback fullscreenCallback;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Local plugins, registered before the bridge boots — they are not npm
         // packages, so nothing generates a capacitor.plugins.json entry for them.
         registerPlugin(TtsPlugin.class);
         registerPlugin(EdgeTtsPlugin.class);
+        // 听书常驻播放的前台服务 + 通知栏控制。
+        registerPlugin(ListenPlugin.class);
+        registerPlugin(CastPlugin.class);
         super.onCreate(savedInstanceState);
         applySystemBars();
         exposeBarBridge();
+        // Bridge 在它的构造里装的是那个「拒绝全屏」的 WebChromeClient，这里换掉。
+        // Capacitor 自己的对话框 / 文件选择 / 权限逻辑都在父类里，所以只继承不改。
+        WebView webView = getBridge() == null ? null : getBridge().getWebView();
+        if (webView != null) {
+            webView.setWebChromeClient(new FullscreenChromeClient(getBridge()));
+        }
+    }
+
+    /**
+     * 全屏进/出：加一层铺满的 view + 隐藏系统栏 + 转横屏。
+     *
+     * 三件事必须一起做，否则就是「假全屏」：状态栏还在（`art-mobile` 那套
+     * CSS 铺满挡不住系统栏），或者画面横着但屏幕还竖着。
+     */
+    public class FullscreenChromeClient extends BridgeWebChromeClient {
+
+        public FullscreenChromeClient(Bridge bridge) {
+            super(bridge);
+        }
+
+        @Override
+        public void onShowCustomView(View view, CustomViewCallback callback) {
+            // 已经在全屏时不叠加第二层，按约定回一句「已经收起」。
+            if (fullscreenView != null) {
+                callback.onCustomViewHidden();
+                return;
+            }
+            fullscreenView = view;
+            fullscreenCallback = callback;
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT);
+            getWindow().addContentView(view, lp);
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            setSystemBarsHidden(true);
+        }
+
+        @Override
+        public void onHideCustomView() {
+            exitFullscreen();
+        }
+    }
+
+    /** 退出全屏：撤 view、还方向、放回系统栏。页面上按 Esc / 调 exitFullscreen() 也走这里。 */
+    private void exitFullscreen() {
+        if (fullscreenView == null) return;
+        View view = fullscreenView;
+        fullscreenView = null;
+        ViewGroup parent = (ViewGroup) view.getParent();
+        if (parent != null) parent.removeView(view);
+        if (fullscreenCallback != null) {
+            fullscreenCallback.onCustomViewHidden();
+            fullscreenCallback = null;
+        }
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        setSystemBarsHidden(false);
+        // 系统栏重新出现后窗口 inset 才变，晚一点再读一次，否则缓存里留着全屏时的 0。
+        WebView webView = getBridge() == null ? null : getBridge().getWebView();
+        if (webView != null) webView.postDelayed(this::captureInsets, 300);
+    }
+
+    private void setSystemBarsHidden(boolean hidden) {
+        WindowInsetsControllerCompat c =
+                WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+        if (c == null) return;
+        if (hidden) {
+            // 全屏里从边缘下滑能临时唤出系统栏，符合视频 App 的习惯。
+            c.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            c.hide(WindowInsetsCompat.Type.systemBars());
+        } else {
+            c.show(WindowInsetsCompat.Type.systemBars());
+        }
     }
 
     private void applySystemBars() {
@@ -123,6 +219,15 @@ public class MainActivity extends BridgeActivity {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        /*
+         * 全屏里按返回键应该先退出全屏，而不是把页面退掉 —— 后者会让那层
+         * 全屏 view 悬在别的页面上。系统返回手势最终也落到 KEYCODE_BACK，
+         * 在这里吃掉 up/down 就轮不到 OnBackPressedDispatcher 了。
+         */
+        if (fullscreenView != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            if (event.getAction() == KeyEvent.ACTION_UP) exitFullscreen();
+            return true;
+        }
         if (volumeKeysEnabled) {
             int code = event.getKeyCode();
             if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN) {
@@ -143,6 +248,9 @@ public class MainActivity extends BridgeActivity {
 
     /** Read the real window insets — the authoritative values on every API level. */
     private void captureInsets() {
+        // 全屏时系统栏是藏起来的，inset 会读成 0；别把这个 0 写进缓存，
+        // 否则退出全屏后页面顶部会少一截状态栏留白。
+        if (fullscreenView != null) return;
         WebView webView = getBridge() == null ? null : getBridge().getWebView();
         if (webView == null) return;
         WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(webView);
@@ -186,6 +294,40 @@ public class MainActivity extends BridgeActivity {
                         WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
                 c.setAppearanceLightStatusBars(light);
                 c.setAppearanceLightNavigationBars(light);
+            });
+        }
+
+        /**
+         * 状态栏底色（`#rrggbb`）。
+         *
+         * 窗口虽然请求了 edge-to-edge，但这台设备上 WebView 实际还是被系统栏让出
+         * 了空间，于是最上面那条是窗口背景（白），而不是页面画的颜色——深色页
+         * 就会出现一条白带 + 白图标。让页面把自己的表面色告诉窗口，两边才一致。
+         *
+         * Android 15+ 上这个调用是 no-op（系统强制透明），那里本来就是 edge-to-edge，
+         * 页面自己会画到状态栏下面。
+         */
+        @JavascriptInterface
+        public void setBackground(final String hex) {
+            if (hex == null || !hex.startsWith("#")) return;
+            final int color;
+            try {
+                color = Color.parseColor(hex);
+            } catch (IllegalArgumentException e) {
+                return;
+            }
+            runOnUiThread(() -> {
+                /*
+                 * 三处一起涂，因为 WebView 到底有没有铺到系统栏下面取决于
+                 * 设备/OEM：涂窗口背景能盖住「WebView 被让位」时露出的那条，
+                 * 涂系统栏颜色则在铺满的情况下生效。多涂一处没有副作用——
+                 * 被页面盖住的颜色看不见。
+                 */
+                getWindow().addFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+                getWindow().setStatusBarColor(color);
+                getWindow().setNavigationBarColor(color);
+                getWindow().getDecorView().setBackgroundColor(color);
             });
         }
 

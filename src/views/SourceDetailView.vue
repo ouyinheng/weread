@@ -336,7 +336,7 @@ async function removeSource(): Promise<void> {
   border-radius: 8px;
   background: var(--accent);
   font-size: calc(13px * var(--app-font-scale));
-  color: #fff;
+  color: var(--on-accent);
   flex-shrink: 0;
 }
 
@@ -500,7 +500,7 @@ async function removeSource(): Promise<void> {
 
 .src-sheet__btn--primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .src-sheet__btn:disabled {

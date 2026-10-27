@@ -44,7 +44,7 @@ function choose(id: string) {
 <template>
   <div class="font-page">
     <header class="font-header">
-      <button class="font-back" aria-label="返回" @click="router.back()">
+      <button class="font-back tap-target" aria-label="返回" @click="router.back()">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="font-title">{{ isApp ? '界面字体' : '字体' }}</span>
@@ -65,7 +65,7 @@ function choose(id: string) {
         <button
           v-for="t in tabs"
           :key="t.id"
-          class="font-tab"
+          class="font-tab tap-target"
           :class="{ 'font-tab--on': group === t.id }"
           @click="group = t.id"
         >{{ t.label }}</button>
@@ -77,11 +77,12 @@ function choose(id: string) {
           :key="f.id"
           class="font-row"
           :class="{ 'font-row--on': selected === f.id }"
-          :style="{ fontFamily: f.stack }"
           @click="choose(f.id)"
         >
           <span class="font-row__label">{{ f.label }}</span>
-          <span class="font-row__sample">读书之乐</span>
+          <!-- Only the sample switches face: a list whose *labels* render in
+               eight different fonts is unreadable as a list. -->
+          <span class="font-row__sample" :style="{ fontFamily: f.stack }">读书之乐</span>
           <Icon v-if="selected === f.id" name="check" :size="18" :width="2.2" class="font-row__check" />
         </button>
       </div>
@@ -110,10 +111,12 @@ function choose(id: string) {
 
 .font-back {
   position: absolute;
-  left: 8px;
-  bottom: 2px;
-  width: 38px;
-  height: 38px;
+  /* 44×44 hit box; the glyph stays 24 and moves with it (-3px each side keeps
+     the optical centre where the 38px version had it). */
+  left: 5px;
+  bottom: -1px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -181,7 +184,11 @@ function choose(id: string) {
 
 .font-tab {
   flex-shrink: 0;
-  padding: 7px 14px;
+  display: inline-flex;
+  align-items: center;
+  /* 44px: the chips row is the filter for the whole list below it. */
+  min-height: 44px;
+  padding: 0 14px;
   border-radius: 16px;
   background: var(--bg-panel);
   font-size: calc(13px * var(--app-font-scale));
@@ -192,7 +199,7 @@ function choose(id: string) {
 
 .font-tab--on {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 .font-list {

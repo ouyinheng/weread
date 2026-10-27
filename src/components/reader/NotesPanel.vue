@@ -527,7 +527,7 @@ function formatDate(ts: number): string {
   border-radius: 3px;
   font-size: calc(10px * var(--app-font-scale));
   line-height: 1.5;
-  color: var(--accent);
+  color: var(--accent-on-soft);
   background: var(--accent-soft);
 }
 

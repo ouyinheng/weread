@@ -47,4 +47,5 @@ export type IconName =
   | 'tab-shelf'
   | 'tab-audio'
   | 'tab-tv'
+  | 'media'
   | 'tab-me'

@@ -132,7 +132,7 @@ const emit = defineEmits<{
   padding: 0 4px;
   border-radius: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: calc(9px * var(--app-font-scale));
   line-height: 15px;
   text-align: center;

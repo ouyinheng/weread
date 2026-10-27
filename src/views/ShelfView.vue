@@ -201,12 +201,12 @@ onMounted(() => {
 <template>
   <div class="shelf tab-page" :class="{ 'shelf--selecting': selectMode }">
     <header class="shelf__header">
-      <div class="shelf__search" @click="router.push({ name: 'search' })">
+      <!-- The pill is the entry: a 「书城」 button inside a search field pointed
+           at the same page while promising a store that no longer exists. -->
+      <button class="shelf__search" aria-label="搜索书籍" @click="router.push({ name: 'search' })">
         <Icon name="search" :size="17" />
         <span class="shelf__search-text">搜本书</span>
-        <span class="shelf__search-divider" />
-        <button class="shelf__search-store" @click.stop="router.push({ name: 'search' })">书城</button>
-      </div>
+      </button>
     </header>
 
     <!-- Title row: WeRead keeps 「书架」 on the left and the two actions right. -->
@@ -341,13 +341,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 36px;
+  /* 44px: the pill itself is the tap target now. */
+  height: 44px;
   padding: 0 12px;
+  width: 100%;
+  text-align: left;
   /* WeRead's search field is a translucent grey pill on the page canvas. */
   background: rgba(120, 120, 128, 0.12);
   border-radius: 8px;
   font-size: calc(15px * var(--app-font-scale));
-  color: var(--text-secondary);
+  color: var(--text-placeholder);
   min-width: 0;
 }
 
@@ -358,26 +361,16 @@ onMounted(() => {
   flex: 1;
 }
 
-.shelf__search-divider {
-  width: 1px;
-  height: 15px;
-  background: rgba(120, 120, 128, 0.3);
-  flex-shrink: 0;
-}
-
-.shelf__search-store {
-  font-size: calc(15px * var(--app-font-scale));
-  color: var(--text);
-  padding-left: 2px;
-  flex-shrink: 0;
-}
-
 /* ---------- title row ---------- */
 .shelf__bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 20px 2px;
+  /* 44px row: 「导入」「选择」 are two of the most-tapped controls on this
+     screen and were 21px tall. The title sits centred in the same band the
+     reference uses, so the row only grows into its own padding. */
+  min-height: 44px;
+  padding: 0 20px;
   flex-shrink: 0;
 }
 
@@ -404,13 +397,17 @@ onMounted(() => {
   gap: 3px;
   font-size: calc(15px * var(--app-font-scale));
   color: var(--text);
+  /* Fills the row's 44px band; the text inside stays 21px tall. */
+  height: 44px;
 }
 
 /* ---------- sort tabs ---------- */
 .shelf__tabs {
   display: flex;
   gap: 22px;
-  padding: 4px 20px 10px;
+  /* The row keeps its total height; the padding moved from the container into
+     each tab so the target — not the text — fills it. */
+  padding: 0 20px 4px;
   overflow-x: auto;
   flex-shrink: 0;
 }
@@ -420,7 +417,11 @@ onMounted(() => {
   font-size: calc(15px * var(--app-font-scale));
   color: var(--text-secondary);
   white-space: nowrap;
-  padding: 4px 0 6px;
+  /* 45px tall (: 31px was below the 44px floor and this row is the most-used
+     control on the shelf). Horizontal padding widens the 30px label boxes
+     without letting neighbours overlap. */
+  padding: 12px 7px;
+  margin: 0 -7px;
   transition: color 140ms ease-out;
 }
 
@@ -505,6 +506,7 @@ onMounted(() => {
 
 .shelf__badge--progress {
   background: var(--accent);
+  color: var(--on-accent);
 }
 
 .shelf__item-title {
@@ -582,6 +584,7 @@ onMounted(() => {
 .shelf-actions__check--on {
   background: var(--accent);
   border-color: var(--accent);
+  color: var(--on-accent);
 }
 
 /* Keep the last row clear of the action bar. */
@@ -634,7 +637,7 @@ onMounted(() => {
   padding: 0 26px;
   border-radius: 19px;
   background: var(--accent);
-  color: var(--text-inverse);
+  color: var(--on-accent);
   font-size: calc(15px * var(--app-font-scale));
   font-weight: 500;
   transition: background-color 120ms;

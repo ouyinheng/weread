@@ -11,7 +11,7 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{ts,vue,css}\"",
-    "test:e2e": "node tests/e2e.browser.mjs && node tests/tabbar.browser.mjs"
+    "test:e2e": "node tests/e2e.browser.mjs && node tests/listen-background.browser.mjs && node tests/tabbar.browser.mjs"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.1",

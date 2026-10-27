@@ -226,7 +226,7 @@ async function doAction(group: HitGroup): Promise<void> {
 <template>
   <div class="search-page">
     <header class="search__header">
-      <button class="search__back" aria-label="返回" @click="goBack">
+      <button class="search__back tap-target" aria-label="返回" @click="goBack">
         <Icon name="back" :size="22" :width="2" />
       </button>
       <div class="search__field">
@@ -239,11 +239,11 @@ async function doAction(group: HitGroup): Promise<void> {
           autocomplete="off"
           @keyup.enter="submit"
         />
-        <button v-if="query" class="search__clear" aria-label="清空" @click="clearQuery">
+        <button v-if="query" class="search__clear tap-target" aria-label="清空" @click="clearQuery">
           <Icon name="close" :size="14" :width="2" />
         </button>
       </div>
-      <button class="search__submit" @click="submit">搜索</button>
+      <button class="search__submit tap-target" @click="submit">搜索</button>
     </header>
 
     <main class="search__body">
@@ -276,8 +276,6 @@ async function doAction(group: HitGroup): Promise<void> {
             >{{ h }}</button>
           </div>
         </div>
-
-        <p class="search__tip">输入书名或作者，从已启用的网络书源中搜索。</p>
       </template>
 
       <!-- 搜索结果 -->
@@ -379,22 +377,26 @@ async function doAction(group: HitGroup): Promise<void> {
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 36px;
+  /* 44px field: the <input> was a 17px band inside a 36px pill, so a tap on
+     the pill's own padding did nothing. */
+  height: 44px;
   padding: 0 10px;
   border-radius: 8px;
   background: rgba(120, 120, 128, 0.12);
-  color: var(--text-secondary);
+  color: var(--text-placeholder);
 }
 
 .search__field input {
   flex: 1;
   min-width: 0;
+  /* Fills the pill so the whole field focuses, not just the 17px text band. */
+  align-self: stretch;
   font-size: calc(14px * var(--app-font-scale));
   color: var(--text);
 }
 
 .search__field input::placeholder {
-  color: var(--text-secondary);
+  color: var(--text-placeholder);
 }
 
 .search__clear {
@@ -453,11 +455,14 @@ async function doAction(group: HitGroup): Promise<void> {
 
 .search__setup-btn {
   margin-top: 4px;
-  padding: 8px 18px;
+  min-height: 44px;
+  padding: 0 20px;
+  display: inline-flex;
+  align-items: center;
   border-radius: 16px;
   background: var(--accent);
   font-size: calc(13px * var(--app-font-scale));
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .search__history-head {
@@ -498,12 +503,6 @@ async function doAction(group: HitGroup): Promise<void> {
 
 .search__chip:active {
   opacity: 0.6;
-}
-
-.search__tip {
-  font-size: calc(12px * var(--app-font-scale));
-  line-height: 1.6;
-  color: var(--text-secondary);
 }
 
 .search__status {
@@ -609,7 +608,7 @@ async function doAction(group: HitGroup): Promise<void> {
 
 .search__result-src--active {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 .search__result-add {
@@ -619,7 +618,7 @@ async function doAction(group: HitGroup): Promise<void> {
   border-radius: 14px;
   background: var(--accent);
   font-size: calc(12px * var(--app-font-scale));
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .search__result-add--done {

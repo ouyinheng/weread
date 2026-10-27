@@ -318,7 +318,7 @@ const shownFonts = computed(() =>
   white-space: nowrap;
 }
 .fp-pill--on {
-  color: var(--accent);
+  color: var(--accent-on-soft);
   background: var(--accent-soft);
 }
 
@@ -404,7 +404,7 @@ const shownFonts = computed(() =>
   white-space: nowrap;
 }
 .fp-tab--on {
-  color: var(--accent);
+  color: var(--accent-on-soft);
   background: var(--accent-soft);
   font-weight: 500;
 }
@@ -424,8 +424,8 @@ const shownFonts = computed(() =>
   overflow: hidden;
 }
 .fp-font-card--on {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-on-soft);
+  color: var(--accent-on-soft);
   background: var(--accent-soft);
 }
 
@@ -448,7 +448,7 @@ const shownFonts = computed(() =>
   color: var(--text);
 }
 .fp-indent-card--on {
-  border-color: var(--accent);
+  border-color: var(--accent-on-soft);
   background: var(--accent-soft);
 }
 .fp-indent-card--on .fp-indent-icon,
@@ -488,9 +488,9 @@ const shownFonts = computed(() =>
   color: var(--text);
 }
 .fp-turn-row--on {
-  border-color: var(--accent);
+  border-color: var(--accent-on-soft);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 .fp-turn-speed {
@@ -514,7 +514,7 @@ const shownFonts = computed(() =>
 }
 .fp-turn-speed__btn--on {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 /* Switch, same one the settings page uses. */

@@ -10,17 +10,22 @@
  *  - the transition direction, computed by the router guard and read from
  *    `route.meta.transition`
  *  - status bar / tab bar colour, sampled from the active page surface
+ *  - the floating 听书 control, which belongs to the *session*, not to the
+ *    reader: listening continues when you go back to 书架, so its control has
+ *    to be on every page too.
  */
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore, useAppSettingsStore } from './stores'
 import { useSourceStore } from './stores/source'
 import TabBar from './components/TabBar.vue'
+import ListenBar from './components/reader/ListenBar.vue'
 import ImportOverlay from './components/ImportOverlay.vue'
 import DialogHost from './components/DialogHost.vue'
-import { applyStatusBarStyle, isNativeShell } from './utils/native'
+import { applyStatusBarBackground, applyStatusBarStyle, isNativeShell } from './utils/native'
 import { isTabRoute } from './router/tabs'
 import { uiState } from './utils/ui-state'
+import { listenSession } from './audio/session'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,6 +47,53 @@ const isFullBleed = computed(() => String(route.name || '') === 'reader' || isTv
 
 /** Only tab pages are cached; detail pages should re-read fresh data. */
 const keepAliveNames = ['shelf', 'tv', 'me']
+
+/* ---------- 听书 mini control ---------- */
+/**
+ * Visible on every page while a session is live — 书架 / 影视 / 我 / 设置 都不例外.
+ * The one exception is the reader's own full-screen 听书 page: it *is* the
+ * control surface, and a floating bar on top of it would cover its buttons.
+ */
+const showsListenBar = computed(() => {
+  if (!listenSession.active.value) return false
+  const onOwnReader =
+    route.name === 'reader' &&
+    String(route.params.id || '') === listenSession.bookId.value
+  return !(onOwnReader && listenSession.expanded.value)
+})
+
+const listenStatus = computed(() => listenSession.status.value)
+const listenCover = computed(() => listenSession.cover.value)
+const listenTimerLeft = computed(() => listenSession.timerLeft.value)
+
+function toggleListen() {
+  void listenSession.toggle()
+}
+
+function closeListen() {
+  void listenSession.stop()
+}
+
+/**
+ * Expand the session. Inside the reader of the same book that is a local state
+ * change; anywhere else it navigates back into that book's 听书 page, at the
+ * chapter the voice is on — not at the book's saved position, which may lag a
+ * chapter behind during auto-advance.
+ */
+async function expandListen() {
+  const onOwnReader =
+    route.name === 'reader' && String(route.params.id || '') === listenSession.bookId.value
+  if (onOwnReader) {
+    listenSession.expand()
+    return
+  }
+  if (!listenSession.bookId.value) return
+  await router.push({
+    name: 'reader',
+    params: { id: listenSession.bookId.value },
+    query: { listen: '1', chapter: String(listenSession.chapterIndex.value) },
+  })
+}
 
 /**
  * Read straight from the guard's decision. Fall back to `none` for the very
@@ -94,6 +146,9 @@ function cssVarValue(name: string): string {
 function syncNativeChrome() {
   const dark = isDarkTheme.value
   applyStatusBarStyle({ dark })
+  // 系统栏底色跟着页面走；否则深色页顶部会留一条白带（图标也是白的）。
+  const surface = cssVarValue(pageSurfaceVar.value)
+  if (surface) void applyStatusBarBackground(surface)
 
   // Keep the browser/Android task-switcher colour in sync with the page.
   const meta = document.querySelector('meta[name="theme-color"]')
@@ -240,6 +295,16 @@ onBeforeUnmount(() => {
       </router-view>
     </div>
     <TabBar v-if="showsTabBar" />
+    <!-- 听书常驻控件：跟随会话，不跟随页面。 -->
+    <ListenBar
+      v-if="showsListenBar"
+      :status="listenStatus"
+      :cover="listenCover"
+      :timer-left="listenTimerLeft"
+      @toggle="toggleListen"
+      @expand="expandListen"
+      @close="closeListen"
+    />
     <ImportOverlay />
     <DialogHost />
   </div>
@@ -250,6 +315,12 @@ onBeforeUnmount(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
+  /*
+   * 整屏内容让开左右切边。竖屏是 0，横屏（刘海/挖孔在侧边）才生效；
+   * 阅读页和播放页宁可两侧留一点黑，也不让工具栏按钮压在挖孔下面。
+   */
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
   /* Page canvas: WeRead puts white cards on a light grey field. */
   background: var(--page-surface, var(--bg-page));
   transition: background-color var(--page-duration) var(--page-easing);

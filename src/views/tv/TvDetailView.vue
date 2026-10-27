@@ -54,12 +54,22 @@ const visibleEps = computed(() =>
 )
 const hiddenCount = computed(() => Math.max(0, orderedEps.value.length - COLLAPSED))
 
+/** 秒 → m:ss / h:mm:ss */
+function mmss(sec: number): string {
+  const s = Math.max(0, Math.floor(sec || 0))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = s % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return h ? `${h}:${pad(m)}:${pad(r)}` : `${m}:${pad(r)}`
+}
+
 /** 主按钮：看过就续看，没看过就从第一集。 */
 const primary = computed(() => {
   const l = last.value
   const resumeGroup = l ? detail.value?.groups[l.groupIndex] : undefined
   if (l && resumeGroup && l.episodeIndex < resumeGroup.episodes.length) {
-    return { gi: l.groupIndex, ei: l.episodeIndex, label: `续看 ${l.episodeName}` }
+    return { gi: l.groupIndex, ei: l.episodeIndex, label: '续看' }
   }
   return { gi: groupIndex.value, ei: 0, label: episodeCount.value ? '播放第 1 集' : '播放' }
 })
@@ -141,8 +151,10 @@ function metaText(): string {
             <Icon name="play" :size="16" :width="2" />
             <span>{{ primary.label }}</span>
           </button>
-          <span class="tv-actions__hint">
-            {{ last ? `上次看到 ${last.episodeName}` : '从第一集开始' }}
+          <!-- 一句话说清「看的是哪一集、看到哪」；按钮只写动作，
+               不重复剧集名（原来按钮和这里是同一句话）。 -->
+          <span v-if="last" class="tv-actions__hint">
+            {{ last.episodeName }} · 上次看到 {{ mmss(last.position) }}
           </span>
         </div>
 
@@ -330,7 +342,7 @@ function metaText(): string {
 }
 .tv-hero__tag--accent {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 .tv-actions {
@@ -349,7 +361,7 @@ function metaText(): string {
   border: 0;
   border-radius: 21px;
   background: var(--accent);
-  color: var(--text-inverse);
+  color: var(--on-accent);
   font-size: 14px;
   font-weight: 600;
   font-family: inherit;
@@ -400,9 +412,9 @@ function metaText(): string {
   font-family: inherit;
 }
 .tv-eps__group--active {
-  border-color: var(--accent);
+  border-color: var(--accent-on-soft);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 .tv-eps__head {
@@ -444,7 +456,7 @@ function metaText(): string {
 .tv-eps__item:active { opacity: 0.7; }
 .tv-eps__item--last {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 

@@ -2,33 +2,38 @@
 /**
  * 播放页。
  *
- * 布局按长视频 App 的详情态来：顶部是 16:9 播放器，下面依次是当前集信息、
- * 「下一集」和整块选集。返回和全屏都放在顶部导航里，点击目标稳定、不需要先
- * 点出控制栏。
+ * 播放器是 artplayer（成熟开源库）+ hls.js，控件全部用它的自带组件：
+ * 单击显示控制栏、双击播放/暂停、左右拖动调进度（`gesture`）、长按 3 倍速
+ * （`fastForward`）、锁屏（`lock`）、倍速与画面比例（`setting`）。
  *
- * 交互对齐爱奇艺/腾讯视频的播放习惯，全部铺在画面的透明手势层上：
- *   单击        呼出/收起控制栏
- *   双击中间    播放/暂停；双击左右 1/3  快退/快进 10 秒
- *   左右滑动    拖进度，居中显示目标时间
- *   上下滑动    左半屏调亮度，右半屏调音量
- *   长按        2 倍速播放，松手还原
- * 手势层盖在画面上、垫在 artplayer 控制栏下面，所以进度条和按钮照常可点。
+ * 这里不再自己写触摸手势。手写那套（双击判定 + 左右滑进度 + 上下滑亮度/音量）
+ * 和播放器自带的 click/touchmove 抢同一批事件：一次双击会被两边各算一次，
+ * 亮度用 CSS filter 调还会连着视频以外的东西一起变暗。自带能力已经覆盖同样
+ * 的操作，就别再平行实现一份。
  *
- * 全屏态给一套独立控制层：标题栏（退出/剧名/倍速/选集/锁屏），锁住后只剩
- * 解锁按钮；选集走右侧抽屉，线路也能在里面切。横屏自动进全屏，退出还原。
+ * 页面只负责四件事：
+ *   1. 16:9 舞台 + 全屏（见下面 enterFull）
+ *   2. 剧集信息 / 选集 / 自动连播
+ *   3. 进度落库
+ *   4. 播放失败时的「重试 / 换线路」
  *
- * artplayer + hls.js：CMS 源给出的播放地址九成是 m3u8，少数是 mp4。播放失败
- * 时给「重试 / 换线路」，而不是丢一句提示让人猜。
+ * 全屏走的是平台 HTML5 全屏（`element.requestFullscreen()`），真正的实施在
+ * 原生侧：`MainActivity.FullscreenChromeClient` 把全屏元素盖满窗口、藏掉系统
+ * 栏、转成横屏。Capacitor 自带的 `BridgeWebChromeClient.onShowCustomView()`
+ * 第一句就是 `callback.onCustomViewHidden()` —— 它把全屏取消了，所以之前
+ * `requestFullscreen()` 一定静默失败，只能退回「CSS 铺满」，那既不是真全屏
+ * 也挡不住状态栏。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Artplayer from 'artplayer'
 import Hls from 'hls.js'
 import Icon from '@/components/Icon.vue'
-import MorphIcon from '@/components/MorphIcon.vue'
+import CastSheet from '@/components/tv/CastSheet.vue'
+import { castSupported, castStatus, castTo, stopCasting, type CastDevice } from '@/utils/cast'
 import { useTvStore } from '@/stores/tv'
 import { fetchDetail } from '@/utils/tv/cms'
-import { isNativeShell } from '@/utils/native'
+import { refreshSafeArea } from '@/utils/native'
 import type { TvDetail } from '@/utils/tv/types'
 
 const route = useRoute()
@@ -39,26 +44,17 @@ const sourceId = String(route.query.source || '')
 const vodId = String(route.query.id || '')
 
 const NEXT_SECONDS = 5
-const SEEK_STEP = 10
-const TAP_GAP = 280
-const LONG_PRESS_MS = 550
 const SPEED_KEY = 'weread.tv.speed'
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 const detail = ref<TvDetail>()
 const loading = ref(true)
 const error = ref('')
 const fatal = ref('')
-const tip = ref('')
 const countdown = ref(0)
 const reversed = ref(false)
-const pseudoFull = ref(false)
 const isFull = ref(false)
-const controlsVisible = ref(true)
-const locked = ref(false)
 const drawerOpen = ref(false)
-const sheetOpen = ref(false)
-const speed = ref(readSpeed())
+const rate = ref(readSpeed())
 
 const groupIndex = ref(Number(route.query.g || 0))
 const epIndex = ref(Number(route.query.e || 0))
@@ -71,7 +67,6 @@ let hls: Hls | null = null
 let lastSave = 0
 let countTimer = 0
 let startTimer = 0
-let tipTimer = 0
 let started = false
 let netRetries = 0
 let mediaRetries = 0
@@ -88,20 +83,100 @@ const orderedEps = computed(() => {
   return reversed.value ? list.reverse() : list
 })
 
-function readSpeed(): number {
-  const n = Number(localStorage.getItem(SPEED_KEY))
-  return SPEEDS.includes(n) ? n : 1
+const descOpen = ref(false)
+
+/* ---------- 投屏 ---------- */
+const showCast = castSupported()
+const castOpen = ref(false)
+const castSheet = ref<InstanceType<typeof CastSheet> | null>(null)
+/** 正在投的设备；空表示本机播放。 */
+const castTarget = ref<CastDevice | null>(null)
+/** 界面上的「投屏到 XXX」。页面重建后只知道名字，所以和 castTarget 分开存。 */
+const castName = ref('')
+
+async function pickCast(d: CastDevice): Promise<void> {
+  const ep = episode.value
+  if (!ep) return
+  try {
+    await castTo(d, ep.url, `${detail.value?.name || ''} ${ep.name}`.trim())
+    castTarget.value = d
+    castName.value = d.name
+    player?.pause()
+    castOpen.value = false
+    castSheet.value?.done()
+    toast(`已投屏到 ${d.name}`)
+  } catch {
+    castSheet.value?.done()
+    toast('投屏失败，换一台设备试试')
+  }
 }
 
-function showTip(text: string, ms = 1500): void {
-  tip.value = text
-  clearTimeout(tipTimer)
-  if (ms > 0) tipTimer = window.setTimeout(() => (tip.value = ''), ms)
+async function stopCastHere(): Promise<void> {
+  await stopCasting()
+  castTarget.value = null
+  castName.value = ''
+  toast('已停止投屏')
+}
+/** 只有真的会被截断才给「展开」，否则那两个字就是噪声。 */
+const canExpand = computed(() => (detail.value?.desc || '').length > 90)
+
+/** 副信息：来源 · 年份 · 地区 · 类型，空的字段不占位。 */
+const subLine = computed(() => {
+  const d = detail.value
+  if (!d) return ''
+  return [d.source.name, d.year, d.area, d.typeName].filter(Boolean).join(' · ')
+})
+
+/**
+ * 选集按钮上的短标签。
+ *
+ * CMS 给的集名五花八门：`第01集` / `HD国语版` / `正片`。命名里带数字就用数字
+ * （参考图里的长视频 App 一律是编号方块），不带数字就退回「第几集」。
+ */
+function epLabel(name: string, index: number): string {
+  const m = String(name || '').match(/(\d{1,4})/)
+  return m ? String(Number(m[1])) : String(index + 1)
+}
+
+function goDetail(): void {
+  void router.push({ name: 'tvDetail', query: { source: sourceId, id: vodId } })
+}
+
+/** 切换分组：选中该分组并回到正序。 */
+function pickGroup(i: number): void {
+  groupIndex.value = i
+  reversed.value = false
+}
+
+function toggleOrder(): void {
+  reversed.value = !reversed.value
+}
+
+function toggleDesc(): void {
+  descOpen.value = !descOpen.value
+}
+
+function closeDrawer(): void {
+  drawerOpen.value = false
+}
+
+function readSpeed(): number {
+  const n = Number(localStorage.getItem(SPEED_KEY))
+  return Number.isFinite(n) && n > 0 ? n : 1
+}
+
+function toast(text: string): void {
+  if (player) player.notice.show = text
 }
 
 onMounted(async () => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
-  watchOrientation()
+  // 从别处回到播放页：插件还记着投的是哪台，界面要跟上。
+  if (showCast) {
+    void castStatus().then((st) => {
+      if (st.casting && !castName.value) castName.value = st.name || '电视'
+    })
+  }
   await store.load()
   const source = store.sources.find(s => s.id === sourceId)
   if (!source) {
@@ -132,6 +207,11 @@ onMounted(async () => {
 })
 
 function goBack(): void {
+  // 全屏时返回键先退全屏，别让人直接从横屏跳走。
+  if (isFull.value) {
+    void exitFull()
+    return
+  }
   const state = window.history.state as { back?: string | null } | null
   if (state?.back) {
     router.back()
@@ -145,260 +225,49 @@ function isM3u8(url: string): boolean {
   return /\.m3u8(\?|#|$)/i.test(url)
 }
 
-/** 真全屏不可用（Android WebView）时退化成铺满视口的样式。 */
+/* ---------- 全屏 ---------- */
+
+/**
+ * 让整个舞台（`.tv-play__screen`）进平台全屏。
+ *
+ * 不直接把 `fullscreen: true` 交给 artplayer，是因为它只会把 `.art-video-player`
+ * 递上去：「即将播放下一集」「播放失败」这些卡片是播放器的兄弟节点，进全屏就
+ * 一起被裁掉了。把整个舞台递上去，浮层还在，视觉上和原生播放器一样。
+ *
+ * 状态栏和横屏都不在这里管 —— `MainActivity.FullscreenChromeClient` 收到
+ * onShowCustomView 后隐藏系统栏、把 Activity 转成横屏；退出时再还回去。
+ */
 async function enterFull(): Promise<void> {
   const el = screen.value
-  if (!el) return
-  // Android 壳没实现 onShowCustomView，requestFullscreen 只会静默失败，
-  // 原生环境直接用铺满视口的样式；浏览器里才走平台全屏。
-  if (isNativeShell() || typeof el.requestFullscreen !== 'function') {
-    pseudoFull.value = true
+  if (!el || typeof el.requestFullscreen !== 'function') {
     isFull.value = true
     return
   }
   try {
     await el.requestFullscreen()
   } catch {
-    // 平台拒绝时退到样式全屏。
-  }
-  if (!document.fullscreenElement) {
-    pseudoFull.value = true
+    // 平台拒绝（没有用户手势 / iOS Safari）：至少把画面铺满，别让按钮变死键。
     isFull.value = true
   }
 }
 
 async function exitFull(): Promise<void> {
-  autoFull = false
-  pseudoFull.value = false
-  isFull.value = false
   if (document.fullscreenElement) await document.exitFullscreen().catch(() => {})
-  unlockOrientation()
+  isFull.value = false
 }
 
 async function toggleFullscreen(): Promise<void> {
-  if (isFull.value || document.fullscreenElement) await exitFull()
+  if (isFull.value) await exitFull()
   else await enterFull()
 }
 
+/** 平台全屏状态是唯一事实来源：Esc、系统手势退出时页面要跟上。 */
 function onFullscreenChange(): void {
-  if (document.fullscreenElement) {
-    isFull.value = true
-    return
-  }
-  isFull.value = pseudoFull.value
-}
-
-/* ---------- 横屏自动全屏 ---------- */
-
-const landscapeMq = window.matchMedia('(max-width: 1024px) and (orientation: landscape)')
-let autoFull = false
-
-function watchOrientation(): void {
-  landscapeMq.addEventListener('change', onOrientation)
-  onOrientation()
-}
-
-function onOrientation(): void {
-  if (loading.value || error.value) return
-  if (landscapeMq.matches && !isFull.value) {
-    autoFull = true
-    void enterFull()
-    lockOrientation()
-  } else if (!landscapeMq.matches && autoFull && isFull.value) {
-    void exitFull()
-  }
-}
-
-interface OrientationApi {
-  lock?: (type: string) => Promise<void>
-  unlock?: () => void
-}
-
-function orientationApi(): OrientationApi | undefined {
-  return (window.screen as Screen & { orientation?: OrientationApi }).orientation
-}
-
-function lockOrientation(): void {
-  orientationApi()?.lock?.('landscape')?.catch(() => {})
-}
-
-function unlockOrientation(): void {
-  orientationApi()?.unlock?.()
-}
-
-/* ---------- 手势 ---------- */
-
-type GestureMode = '' | 'seek' | 'bright' | 'vol'
-
-const seekPreview = ref({ show: false, delta: 0, target: 0, duration: 0 })
-const levelPreview = ref({ show: false, mode: 'bright' as 'bright' | 'vol', value: 0 })
-const fastForwarding = ref(false)
-
-let gMode: GestureMode = ''
-let gStartX = 0
-let gStartY = 0
-let gStartTime = 0
-let gStartVol = 1
-let gStartBright = 1
-let brightnessLevel = 1
-let gTapTimer = 0
-let gLongTimer = 0
-let gLongFired = false
-let gLastTap = 0
-let gLastTouch = 0
-let gHideTimer = 0
-
-function videoEl(): HTMLVideoElement | null {
-  return playerEl.value?.querySelector('video') || null
-}
-
-function setBrightness(value: number): void {
-  brightnessLevel = Math.min(1, Math.max(0.15, value))
-  const el = videoEl()
-  if (el) el.style.filter = `brightness(${brightnessLevel.toFixed(2)})`
-}
-
-function toggleControls(): void {
-  const c = (player as unknown as { controls?: { toggle: () => void } } | null)?.controls
-  c?.toggle()
-}
-
-function fmtTime(sec: number): string {
-  const s = Math.max(0, Math.floor(sec))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-function onTouchStart(e: TouchEvent): void {
-  if (locked.value || !player || e.touches.length !== 1) return
-  gLastTouch = Date.now()
-  const t = e.touches[0]
-  gStartX = t.clientX
-  gStartY = t.clientY
-  gStartTime = player.currentTime
-  gStartVol = player.volume ?? 1
-  gMode = ''
-  gLongFired = false
-  clearTimeout(gLongTimer)
-  gLongTimer = window.setTimeout(() => {
-    // 长按倍速：只在正常播放时有意义，暂停中长按给个提示就好。
-    if (gMode || !player) return
-    if (!player.playing) {
-      showTip('暂停中，双击播放')
-      return
-    }
-    gLongFired = true
-    fastForwarding.value = true
-    player.playbackRate = 2
-  }, LONG_PRESS_MS)
-}
-
-function onTouchMove(e: TouchEvent): void {
-  if (locked.value || !player || e.touches.length !== 1) return
-  const t = e.touches[0]
-  const dx = t.clientX - gStartX
-  const dy = t.clientY - gStartY
-  const rect = screen.value?.getBoundingClientRect()
-  if (!rect) return
-
-  if (!gMode) {
-    if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return
-    clearTimeout(gLongTimer)
-    gMode = Math.abs(dx) > Math.abs(dy) ? 'seek' : t.clientX - rect.left < rect.width / 2 ? 'bright' : 'vol'
-    // 以手势起点为基准，后续位移全部相对它算增量。
-    gStartX = t.clientX
-    gStartY = t.clientY
-    if (gMode === 'bright') gStartBright = brightnessLevel
-  }
-  e.preventDefault()
-
-  if (gMode === 'seek') {
-    const duration = player.duration || 0
-    if (!duration) return
-    const ratio = (t.clientX - gStartX) / rect.width
-    const target = Math.min(duration, Math.max(0, gStartTime + ratio * duration * 0.5))
-    seekPreview.value = {
-      show: true,
-      delta: Math.round(target - gStartTime),
-      target,
-      duration,
-    }
-  } else if (gMode === 'vol') {
-    const v = Math.min(1, Math.max(0, gStartVol + (gStartY - t.clientY) / rect.height))
-    player.volume = v
-    levelPreview.value = { show: true, mode: 'vol', value: Math.round(v * 100) }
-  } else if (gMode === 'bright') {
-    const v = Math.min(1, Math.max(0.15, gStartBright + (gStartY - t.clientY) / rect.height))
-    setBrightness(v)
-    levelPreview.value = { show: true, mode: 'bright', value: Math.round(v * 100) }
-  }
-}
-
-function onTouchEnd(e: TouchEvent): void {
-  gLastTouch = Date.now()
-  clearTimeout(gLongTimer)
-  if (locked.value || !player) return
-
-  if (gLongFired) {
-    gLongFired = false
-    fastForwarding.value = false
-    player.playbackRate = speed.value
-    return
-  }
-
-  if (gMode === 'seek') {
-    player.seek = seekPreview.value.target
-    gHideTimer = window.setTimeout(() => (seekPreview.value.show = false), 500)
-  } else if (gMode) {
-    gHideTimer = window.setTimeout(() => (levelPreview.value.show = false), 500)
-  } else {
-    handleTap(e.changedTouches[0]?.clientX || 0)
-  }
-  gMode = ''
-}
-
-/** 单击呼出控制栏，双击按区域快进快退或播放/暂停（280ms 内等第二次点击）。 */
-function handleTap(clientX: number): void {
-  const now = Date.now()
-  const rect = screen.value?.getBoundingClientRect()
-  if (now - gLastTap < TAP_GAP) {
-    clearTimeout(gTapTimer)
-    gLastTap = 0
-    const x = rect ? clientX - rect.left : 0
-    const w = rect?.width || 1
-    if (x < w / 3 && player) {
-      player.currentTime = Math.max(0, player.currentTime - SEEK_STEP)
-      showTip(`快退 ${SEEK_STEP} 秒`)
-    } else if (x > (w * 2) / 3 && player) {
-      player.currentTime = Math.min(player.duration || 0, player.currentTime + SEEK_STEP)
-      showTip(`快进 ${SEEK_STEP} 秒`)
-    } else {
-      player?.toggle()
-    }
-    return
-  }
-  gLastTap = now
-  gTapTimer = window.setTimeout(toggleControls, TAP_GAP)
-}
-
-/** 桌面/鼠标兜底：触屏上合成 click 会被这层忽略。 */
-function onClick(): void {
-  if (Date.now() - gLastTouch < 700) return
-  toggleControls()
-}
-
-function onDblClick(): void {
-  if (Date.now() - gLastTouch < 700) return
-  player?.toggle()
-}
-
-/* ---------- 倍速 ---------- */
-
-function pickSpeed(v: number): void {
-  speed.value = v
-  localStorage.setItem(SPEED_KEY, String(v))
-  if (player) player.playbackRate = v
-  sheetOpen.value = false
-  showTip(`倍速 ${v}x`)
+  const active = !!document.fullscreenElement
+  isFull.value = active
+  if (active) return
+  // 系统栏是异步回来的，晚一点再读 inset，否则会把全屏期间的 0 写进 CSS。
+  window.setTimeout(refreshSafeArea, 320)
 }
 
 /* ---------- 播放核心 ---------- */
@@ -444,28 +313,44 @@ function mount(): void {
   if (!ep || !playerEl.value) return
 
   const history = store.historyOf(sourceId, vodId)
-  const resumeAt = history && history.groupIndex === groupIndex.value && history.episodeIndex === epIndex.value
-    ? history.position
-    : 0
+  const resumeAt =
+    history && history.groupIndex === groupIndex.value && history.episodeIndex === epIndex.value
+      ? history.position
+      : 0
 
   player = new Artplayer({
     container: playerEl.value,
     url: ep.url,
     type: isM3u8(ep.url) ? 'm3u8' : '',
+    poster: detail.value?.pic || '',
     autoplay: true,
     playsInline: true,
-    // 全屏交给页面顶部的按钮：WebView 里 artplayer 自带的那个点了没反应。
+    lang: 'zh-cn',
+    theme: '#1b88ee',
+    // 自带能力：不自己写触摸逻辑，见文件头注释。
+    gesture: true,
+    fastForward: true,
+    lock: true,
+    setting: true,
+    playbackRate: true,
+    // 全屏由页面接管：播放器自带的那个在 WebView 里点了没反应，也不转屏。
     fullscreen: false,
     fullscreenWeb: false,
-    setting: false,
-    pip: true,
+    // WebView 里的画中画没有系统入口，留着只会占一格控制栏。
+    // 音量同理：手机上调音量是硬件键的事，控制栏里那个喇叭在大屏上才有意义。
+    pip: false,
     miniProgressBar: true,
-    theme: '#1b88ee',
+    hotkey: true,
     customType: { m3u8: playM3u8 },
   })
 
-  player.playbackRate = speed.value
-
+  player.playbackRate = rate.value
+  // 控制栏里的喇叭在触屏上没有意义（音量走硬件键），建好后直接摘掉。
+  try {
+    player.controls.remove('volume')
+  } catch {
+    /* 版本差异，没有就算了 */
+  }
   player.on('ready', () => {
     started = true
     clearTimeout(startTimer)
@@ -474,15 +359,23 @@ function mount(): void {
     if (resumeAt > 3 && player) player.currentTime = resumeAt
   })
   player.on('video:timeupdate', onTimeUpdate)
+  player.on('video:ratechange', onRateChange)
   player.on('video:ended', onEnded)
   player.on('video:error', () => {
     // hls.js 会自己上报可恢复/不可恢复的错误；这里只兜底直链 mp4。
     if (!isM3u8(ep.url)) fatal.value = '视频加载失败，请重试'
   })
-  // 控制栏显隐跟着 artplayer 走，全屏顶部栏与它同生共死。
-  player.on('control', (state: boolean) => {
-    controlsVisible.value = state
-  })
+  // 换集/换源会重建播放器，控件状态跟着重置。
+  nextControlAdded = false
+  addControls()
+
+  // 正在投屏时换集：电视上也要跟着换，否则手机在放第 2 集、电视还是第 1 集。
+  if (castTarget.value) {
+    void castTo(castTarget.value, ep.url, `${detail.value?.name || ''} ${ep.name}`.trim()).catch(() => {
+      castTarget.value = null
+      castName.value = ''
+    })
+  }
 
   // 坏源经常既不报错也不出画面：30 秒没 ready 就当失败，别让人一直看转圈。
   started = false
@@ -492,6 +385,103 @@ function mount(): void {
   }, 30000)
 }
 
+/**
+ * 往播放器自带控制栏里加两个按钮。
+ *
+ * 用 `controls.add` 而不是在画面上盖一层 div：这样按钮跟着控制栏一起显隐、
+ * 跟着全屏移动，也不用再算 z-index。
+ */
+function addControls(): void {
+  if (!player) return
+  // index 沿用 artplayer 自己右侧控件的排位：设置 30 / 画中画 40 / 全屏 70，
+  // 这样「选集」落在设置右边、全屏留在最右侧，和常见播放器一致。
+  player.controls.add({
+    name: 'episodes',
+    position: 'right',
+    index: 40,
+    html: '<span style="font-size:12px;line-height:1">选集</span>',
+    click: () => openDrawer(),
+  })
+  renderNextControl()
+  renderCastControl()
+  renderFullscreenControl()
+}
+
+/**
+ * 投屏按钮。放在「选集」和全屏之间——参考里爱奇艺/腾讯都是这一排。
+ * 没有原生插件的环境（浏览器预览）不加这个按钮，免得点了没反应。
+ */
+function renderCastControl(): void {
+  if (!player || !showCast) return
+  player.controls.update({
+    name: 'cast',
+    position: 'right',
+    index: 50,
+    html:
+      // 必须带 style="fill:none"：artplayer 的样式表里有 `svg { fill: 文字色 }`，
+      // 它的优先级高于 fill 属性，不加就会把屏幕填成一块白色方块。
+      '<svg width="20" height="20" viewBox="0 0 24 24" style="fill:none" stroke="currentColor" ' +
+      'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3" y="5" width="18" height="13" rx="2.4"/>' +
+      '<path d="M7.2 14.6a3.2 3.2 0 013.2 3.2M7.2 11a6.8 6.8 0 016.8 6.8"/>' +
+      '<circle cx="7.4" cy="17.6" r="0.9" fill="currentColor" stroke="none"/></svg>',
+    click: () => { castOpen.value = true },
+  })
+}
+
+/**
+ * 「下一集」放进控制栏，只在真的有下一集时出现。
+ *
+ * 原来它在页面下方那一行里，单集电影也摆一个灰按钮；而全屏时整行都不在，
+ * 想跳下一集只能退出全屏。
+ */
+let nextControlAdded = false
+
+function renderNextControl(): void {
+  if (!player) return
+  if (!hasNext.value) {
+    // remove 对不存在的控件会抛，靠自己的标记判断而不是 controls.has（没有这个 API）
+    if (nextControlAdded) {
+      try {
+        player.controls.remove('next')
+      } catch {
+        /* 已经没了 */
+      }
+      nextControlAdded = false
+    }
+    return
+  }
+  player.controls.update({
+    name: 'next',
+    position: 'right',
+    index: 35,
+    html: '<span style="font-size:12px;line-height:1">下一集</span>',
+    click: () => next(),
+  })
+  nextControlAdded = true
+}
+
+watch(hasNext, renderNextControl)
+
+/**
+ * 全屏按钮的图标要跟着状态换。
+ *
+ * 用 `controls.update` 而不是 `remove` + `add`：组件不存在时 `remove` 会抛
+ * "Can't find [name]"，而 `update` 对「有就替换、没有就新增」两种情况都成立。
+ */
+function renderFullscreenControl(): void {
+  if (!player) return
+  player.controls.update({
+    name: 'pageFullscreen',
+    position: 'right',
+    index: 70,
+    html: isFull.value ? player.icons.fullscreenOff : player.icons.fullscreenOn,
+    click: () => void toggleFullscreen(),
+  })
+}
+
+watch(isFull, renderFullscreenControl)
+
 function onTimeUpdate(): void {
   // 进度在走就说明画面是好的，之前的超时/错误提示已经过期。
   if (fatal.value) fatal.value = ''
@@ -499,6 +489,14 @@ function onTimeUpdate(): void {
   if (now - lastSave < 10000) return
   lastSave = now
   saveProgress()
+}
+
+function onRateChange(): void {
+  if (!player) return
+  const v = player.playbackRate
+  if (v === rate.value) return
+  rate.value = v
+  localStorage.setItem(SPEED_KEY, String(v))
 }
 
 function saveProgress(): void {
@@ -547,7 +545,7 @@ function retry(): void {
 
 function onEnded(): void {
   if (!hasNext.value) {
-    showTip('已经是最后一集', 2500)
+    toast('已经是最后一集')
     return
   }
   startCountdown()
@@ -571,7 +569,7 @@ function cancelCountdown(): void {
 function next(): void {
   cancelCountdown()
   if (!hasNext.value) {
-    showTip('已经是最后一集', 2500)
+    toast('已经是最后一集')
     return
   }
   epIndex.value++
@@ -602,14 +600,11 @@ watch([groupIndex, epIndex], async ([g, e]) => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
-  landscapeMq.removeEventListener('change', onOrientation)
   saveProgress()
   cancelCountdown()
-  clearTimeout(gTapTimer)
-  clearTimeout(gLongTimer)
-  clearTimeout(gHideTimer)
-  clearTimeout(tipTimer)
-  unlockOrientation()
+  // 路由切走时必须退掉全屏：那层全屏 view 是盖在窗口上的，
+  // 不退就会悬在书架/详情页上面，方向也留在横屏。
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
   destroyPlayer()
 })
 </script>
@@ -621,52 +616,14 @@ onBeforeUnmount(() => {
         <Icon name="back" :size="22" :width="2" />
       </button>
       <span class="tv-play__nav-title">{{ detail?.name || '播放' }}</span>
-      <button class="tv-play__nav-btn" :aria-label="isFull ? '退出全屏' : '全屏'" @click="toggleFullscreen">
-        <MorphIcon :name="isFull ? 'compress' : 'expand'" :size="20" />
-      </button>
     </header>
 
     <div
       ref="screen"
       class="tv-play__screen"
-      :class="{ 'tv-play__screen--full': pseudoFull, 'tv-play__screen--fatal': !!fatal }"
+      :class="{ 'tv-play__screen--full': isFull, 'tv-play__screen--fatal': !!fatal }"
     >
       <div ref="playerEl" class="tv-play__stage" />
-
-      <!-- 手势层：盖住画面、垫在控制栏和浮层按钮下面。 -->
-      <div
-        v-show="!loading && !error && !fatal && !locked"
-        class="tv-play__gestures"
-        @touchstart="onTouchStart"
-        @touchmove="onTouchMove"
-        @touchend="onTouchEnd"
-        @touchcancel="onTouchEnd"
-        @click="onClick"
-        @dblclick="onDblClick"
-      />
-
-      <!-- 全屏顶部控制层，跟 artplayer 控制栏一起显隐。 -->
-      <div v-if="isFull && !locked" class="tv-play__fsbar" :class="{ 'tv-play__fsbar--show': controlsVisible }">
-        <button class="tv-play__fs-btn" aria-label="退出全屏" @click="exitFull">
-          <Icon name="compress" :size="19" />
-        </button>
-        <div class="tv-play__fs-title">
-          <span class="tv-play__fs-name">{{ detail?.name }}</span>
-          <span class="tv-play__fs-ep">{{ episode?.name }}</span>
-        </div>
-        <button class="tv-play__fs-btn" @click="sheetOpen = true">{{ speed }}x</button>
-        <button class="tv-play__fs-btn" aria-label="选集" @click="openDrawer">
-          <Icon name="catalog" :size="19" />
-        </button>
-        <button class="tv-play__fs-btn" aria-label="锁定" @click="locked = true">
-          <Icon name="lock" :size="19" />
-        </button>
-      </div>
-
-      <!-- 锁定后整层隐藏，只留解锁。 -->
-      <button v-if="isFull && locked" class="tv-play__unlock" aria-label="解锁" @click="locked = false">
-        <Icon name="lock" :size="18" />
-      </button>
 
       <div v-if="loading" class="tv-play__state">正在加载…</div>
       <div v-else-if="error" class="tv-play__state tv-play__state--error">{{ error }}</div>
@@ -675,13 +632,29 @@ onBeforeUnmount(() => {
         <p class="tv-play__fatal-text">{{ fatal }}</p>
         <div class="tv-play__fatal-actions">
           <button class="tv-play__fatal-btn" @click="retry">重试</button>
-          <button v-if="otherGroups" class="tv-play__fatal-btn tv-play__fatal-btn--primary" @click="switchGroup">
+          <button
+            v-if="otherGroups"
+            class="tv-play__fatal-btn tv-play__fatal-btn--primary"
+            @click="switchGroup"
+          >
             换线路
           </button>
         </div>
       </div>
 
       <!-- 自动连播卡片：倒计时条就是剩余时间。 -->
+      <!-- 投屏中：本机不再放画面，用一层说明代替，避免「两个地方都在播」 -->
+      <div v-if="castName" class="tv-play__casting">
+        <svg class="tv-play__casting-icon" width="34" height="34" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="5" width="18" height="13" rx="2.4" />
+          <path d="M7.2 14.6a3.2 3.2 0 013.2 3.2M7.2 11a6.8 6.8 0 016.8 6.8" />
+          <circle cx="7.4" cy="17.6" r="0.9" fill="currentColor" stroke="none" />
+        </svg>
+        <p class="tv-play__casting-text">正在投屏到 {{ castName }}</p>
+        <button class="tv-play__casting-stop" @click="stopCastHere">停止投屏</button>
+      </div>
+
       <div v-if="countdown" class="tv-play__next">
         <div class="tv-play__next-main">
           <span class="tv-play__next-label">即将播放</span>
@@ -697,23 +670,6 @@ onBeforeUnmount(() => {
           <span class="tv-play__next-bar" :style="{ width: (countdown / NEXT_SECONDS) * 100 + '%' }" />
         </div>
       </div>
-
-      <div v-if="tip" class="tv-play__tip" @click="tip = ''">{{ tip }}</div>
-
-      <!-- 手势反馈：拖进度、调亮度/音量、长按倍速。 -->
-      <div v-if="seekPreview.show" class="tv-play__seek">
-        <span class="tv-play__seek-delta">
-          {{ seekPreview.delta >= 0 ? '+' : '' }}{{ seekPreview.delta }}s
-        </span>
-        <span class="tv-play__seek-time">
-          {{ fmtTime(seekPreview.target) }} / {{ fmtTime(seekPreview.duration) }}
-        </span>
-      </div>
-      <div v-if="levelPreview.show" class="tv-play__level" :class="`tv-play__level--${levelPreview.mode}`">
-        <Icon :name="levelPreview.mode === 'bright' ? 'brightness' : 'headphones'" :size="16" />
-        <span>{{ levelPreview.value }}%</span>
-      </div>
-      <div v-if="fastForwarding" class="tv-play__fast">2 倍速播放中</div>
     </div>
 
     <main class="tv-play__body">
@@ -721,26 +677,32 @@ onBeforeUnmount(() => {
       <div v-else-if="error" class="tv-play__placeholder tv-play__placeholder--error">{{ error }}</div>
 
       <template v-else-if="detail">
-        <div class="tv-play__meta">
-          <div class="tv-play__meta-main">
+        <!--
+         信息层：和参考里的长视频 App 一致——当前集 + 详情入口、一行元信息、
+         选集横向条、简介。原来这里是「倍速 / 下一集」两个按钮加一个四列网格，
+         按钮和控制栏重复，网格用的是「HD国语版」这种长名字，一列只能放四个。
+        -->
+        <div class="tv-play__head">
+          <div class="tv-play__head-main">
             <span class="tv-play__ep">{{ episode?.name }}</span>
-            <span class="tv-play__src">{{ detail.source.name }}</span>
+            <span class="tv-play__rate" v-if="rate !== 1">{{ rate }}x</span>
           </div>
-          <button class="tv-play__meta-btn" @click="sheetOpen = true">倍速 {{ speed }}x</button>
-          <button class="tv-play__meta-btn" :disabled="!hasNext" @click="next">
-            下一集
-            <Icon name="chevron-right" :size="13" />
+          <button class="tv-play__detail" @click="goDetail">
+            详情
+            <Icon name="chevron-right" :size="14" :width="2" />
           </button>
         </div>
 
-        <section class="tv-play__eps">
+        <p class="tv-play__sub">{{ subLine }}</p>
+
+        <section v-if="orderedEps.length > 1 || detail.groups.length > 1" class="tv-play__eps">
           <div v-if="detail.groups.length > 1" class="tv-play__groups">
             <button
               v-for="(g, i) in detail.groups"
               :key="g.name + i"
               class="tv-play__group"
               :class="{ 'tv-play__group--active': i === groupIndex }"
-              @click="groupIndex = i; reversed = false"
+              @click="pickGroup(i)"
             >
               {{ g.name }}（{{ g.episodes.length }}）
             </button>
@@ -749,49 +711,47 @@ onBeforeUnmount(() => {
           <div class="tv-play__eps-head">
             <span class="tv-play__eps-title">选集</span>
             <span class="tv-play__eps-count">共 {{ orderedEps.length }} 集</span>
-            <button class="tv-play__eps-order" @click="reversed = !reversed">
+            <button class="tv-play__eps-order" @click="toggleOrder">
               {{ reversed ? '倒序' : '正序' }}
             </button>
           </div>
 
-          <div class="tv-play__eps-grid">
+          <div class="tv-play__eps-strip">
             <button
               v-for="row in orderedEps"
               :key="row.ep.url"
-              class="tv-play__ep"
-              :class="{ 'tv-play__ep--active': row.index === epIndex }"
+              class="tv-play__ep-btn"
+              :class="{ 'tv-play__ep-btn--active': row.index === epIndex }"
+              :aria-label="row.ep.name"
               @click="pickEpisode(row.index)"
             >
-              {{ row.ep.name }}
+              {{ epLabel(row.ep.name, row.index) }}
             </button>
           </div>
+        </section>
+
+        <section v-if="detail.desc" class="tv-play__desc" :class="{ 'tv-play__desc--open': descOpen }">
+          <p class="tv-play__desc-text">{{ detail.desc }}</p>
+          <button v-if="canExpand" class="tv-play__desc-toggle" @click="toggleDesc">
+            {{ descOpen ? '收起' : '展开' }}
+          </button>
         </section>
       </template>
     </main>
 
-    <!-- 倍速面板 -->
-    <div v-if="sheetOpen" class="tv-play__mask" @click="sheetOpen = false">
-      <div class="tv-play__sheet" @click.stop>
-        <div class="tv-play__sheet-title">倍速播放</div>
-        <button
-          v-for="v in SPEEDS"
-          :key="v"
-          class="tv-play__sheet-item"
-          :class="{ 'tv-play__sheet-item--active': v === speed }"
-          @click="pickSpeed(v)"
-        >
-          {{ v }}x
-          <Icon v-if="v === speed" name="check" :size="15" />
-        </button>
-      </div>
-    </div>
+    <CastSheet
+      ref="castSheet"
+      :open="castOpen"
+      @close="castOpen = false"
+      @cast="pickCast"
+    />
 
     <!-- 全屏选集抽屉：线路切换 + 剧集列表 -->
-    <div v-if="drawerOpen" class="tv-play__mask" @click="drawerOpen = false">
+    <div v-if="drawerOpen" class="tv-play__mask" @click="closeDrawer">
       <aside class="tv-play__drawer" @click.stop>
         <div class="tv-play__drawer-head">
           <span class="tv-play__drawer-title">选集</span>
-          <button class="tv-play__drawer-close" aria-label="关闭" @click="drawerOpen = false">
+          <button class="tv-play__drawer-close" aria-label="关闭" @click="closeDrawer">
             <Icon name="close" :size="18" />
           </button>
         </div>
@@ -801,7 +761,7 @@ onBeforeUnmount(() => {
             :key="g.name + i"
             class="tv-play__group"
             :class="{ 'tv-play__group--active': i === groupIndex }"
-            @click="groupIndex = i; reversed = false"
+            @click="pickGroup(i)"
           >
             {{ g.name }}（{{ g.episodes.length }}）
           </button>
@@ -838,8 +798,7 @@ onBeforeUnmount(() => {
   padding: calc(6px + var(--safe-top)) 10px 6px;
   background: var(--bg);
 }
-.tv-play__nav-back,
-.tv-play__nav-btn {
+.tv-play__nav-back {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -850,8 +809,9 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--text);
 }
-.tv-play__nav-back:active,
-.tv-play__nav-btn:active { opacity: 0.55; }
+.tv-play__nav-back:active {
+  opacity: 0.55;
+}
 .tv-play__nav-title {
   flex: 1;
   min-width: 0;
@@ -889,96 +849,68 @@ onBeforeUnmount(() => {
   inset: 0;
 }
 
-/* 手势层：画面之上、art 控件与浮层按钮（z-index 7+）之下。 */
-.tv-play__gestures {
+/* 投屏浮层：盖住画面，说明「现在电视在放」 */
+.tv-play__casting {
   position: absolute;
   inset: 0;
-  z-index: 6;
-  touch-action: none;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  text-align: center;
+  padding: 0 24px;
+}
+
+.tv-play__casting-icon { opacity: 0.9; }
+
+.tv-play__casting-text {
+  font-size: calc(14px * var(--app-font-scale));
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tv-play__casting-stop {
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: #fff;
+  font-size: calc(13px * var(--app-font-scale));
 }
 
 /* 播放失败时 artplayer 的加载圈还转着，会和错误卡片叠在一起。 */
-.tv-play__screen--fatal :deep(.art-loading) { display: none; }
-
-/* ---------- 全屏控制层 ---------- */
-
-.tv-play__fsbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 8;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: calc(6px + var(--safe-top)) 10px 14px;
-  background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
-  opacity: 0;
-  transform: translateY(-8px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  pointer-events: none;
-}
-.tv-play__fsbar--show {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-}
-.tv-play__fs-btn {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  height: 34px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 17px;
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
-  font-size: 12px;
-  font-family: inherit;
-}
-.tv-play__fs-btn:active { opacity: 0.6; }
-.tv-play__fs-title {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 0 8px;
-}
-.tv-play__fs-name {
-  font-size: 14px;
-  color: #fff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tv-play__fs-ep {
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.6);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 40%;
+.tv-play__screen--fatal :deep(.art-loading) {
+  display: none;
 }
 
-.tv-play__unlock {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 8;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 17px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+/*
+ * 锁图标只在全屏里出现。
+ *
+ * artplayer 只要控制栏可见就把左侧那个锁挂出来（`art-control-show .art-layer-lock`），
+ * 竖屏页面里它压在画面上、又没有对应的解锁上下文，看着像卡住了。
+ */
+.tv-play__screen:not(.tv-play__screen--full) :deep(.art-layer-lock) {
+  display: none;
+}
+
+/*
+ * 全屏（横屏）时控制栏贴着物理边缘，刘海/挖孔在侧边就会压住第一个和最后一个
+ * 按钮。artplayer 自己的 --art-padding 是 10px，这里补上安全区。
+ */
+.tv-play__screen--full :deep(.art-bottom) {
+  padding-left: calc(10px + var(--safe-left));
+  padding-right: calc(10px + var(--safe-right));
+}
+
+/* 竖版海报放进 16:9 的框里会被左右留黑，按 cover 裁更像正常封面。 */
+.tv-play__screen :deep(.art-poster) {
+  object-fit: cover;
 }
 
 /* ---------- 状态与卡片 ---------- */
@@ -989,11 +921,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12.5px;
+  font-size: 13px;
   color: rgba(255, 255, 255, 0.65);
   z-index: 1;
 }
-.tv-play__state--error { color: rgba(255, 160, 160, 0.9); }
+.tv-play__state--error {
+  color: rgba(255, 160, 160, 0.9);
+}
 
 .tv-play__fatal {
   position: absolute;
@@ -1015,7 +949,10 @@ onBeforeUnmount(() => {
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.85);
 }
-.tv-play__fatal-actions { display: flex; gap: 10px; }
+.tv-play__fatal-actions {
+  display: flex;
+  gap: 10px;
+}
 .tv-play__fatal-btn {
   flex: 1;
   height: 32px;
@@ -1029,6 +966,7 @@ onBeforeUnmount(() => {
 .tv-play__fatal-btn--primary {
   border-color: var(--accent);
   background: var(--accent);
+  color: var(--on-accent);
 }
 
 .tv-play__next {
@@ -1047,15 +985,21 @@ onBeforeUnmount(() => {
   gap: 2px;
   margin-bottom: 8px;
 }
-.tv-play__next-label { font-size: 10px; color: rgba(255, 255, 255, 0.55); }
+.tv-play__next-label {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+}
 .tv-play__next-name {
-  font-size: 12.5px;
+  font-size: 13px;
   color: #fff;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tv-play__next-actions { display: flex; gap: 8px; }
+.tv-play__next-actions {
+  display: flex;
+  gap: 8px;
+}
 .tv-play__next-btn {
   flex: 1;
   height: 28px;
@@ -1069,6 +1013,7 @@ onBeforeUnmount(() => {
 .tv-play__next-btn--primary {
   border-color: var(--accent);
   background: var(--accent);
+  color: var(--on-accent);
 }
 .tv-play__next-track {
   margin-top: 8px;
@@ -1082,71 +1027,6 @@ onBeforeUnmount(() => {
   height: 100%;
   background: var(--accent);
   transition: width 1s linear;
-}
-
-.tv-play__tip {
-  position: absolute;
-  left: 50%;
-  top: 45%;
-  transform: translate(-50%, -50%);
-  max-width: 80%;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.78);
-  color: #fff;
-  font-size: 12px;
-  line-height: 1.5;
-  text-align: center;
-  z-index: 7;
-}
-
-/* ---------- 手势反馈 ---------- */
-
-.tv-play__seek {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 10px 16px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.72);
-}
-.tv-play__seek-delta { font-size: 20px; font-weight: 600; color: #fff; }
-.tv-play__seek-time { font-size: 11px; color: rgba(255, 255, 255, 0.75); }
-
-.tv-play__level {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
-  font-size: 12px;
-}
-.tv-play__level--bright { left: 14px; }
-.tv-play__level--vol { right: 14px; }
-
-.tv-play__fast {
-  position: absolute;
-  left: 50%;
-  top: 18%;
-  transform: translateX(-50%);
-  z-index: 4;
-  padding: 6px 12px;
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
-  font-size: 12px;
 }
 
 /* ---------- 正文 ---------- */
@@ -1164,46 +1044,66 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   text-align: center;
 }
-.tv-play__placeholder--error { color: #d9534f; }
+.tv-play__placeholder--error {
+  color: #d9534f;
+}
 
-.tv-play__meta {
+.tv-play__head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--divider);
+  gap: 10px;
+  padding-bottom: 4px;
 }
-.tv-play__meta-main {
+.tv-play__head-main {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
 }
-.tv-play__ep { font-size: 14px; color: var(--text); }
-.tv-play__src {
-  font-size: 11px;
+
+/* 当前集名，比正文重一档；长名字截断，不要把「详情」挤走。 */
+
+.tv-play__detail {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  font-size: calc(13px * var(--app-font-scale));
+}
+
+/* 来源 · 年份 · 地区 · 类型 */
+.tv-play__sub {
+  margin: 2px 0 14px;
+  font-size: calc(12px * var(--app-font-scale));
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tv-play__meta-btn {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border: 1px solid var(--divider);
-  border-radius: 14px;
-  padding: 5px 10px;
-  background: var(--bg);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-family: inherit;
+.tv-play__ep {
+  font-size: calc(16px * var(--app-font-scale));
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.tv-play__meta-btn:disabled { opacity: 0.4; }
+.tv-play__rate {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-on-soft);
+  font-size: calc(12px * var(--app-font-scale));
+}
 
-.tv-play__eps { padding-top: 14px; }
+.tv-play__eps {
+  padding-top: 14px;
+}
 .tv-play__groups {
   display: flex;
   gap: 8px;
@@ -1211,7 +1111,9 @@ onBeforeUnmount(() => {
   padding-bottom: 12px;
   scrollbar-width: none;
 }
-.tv-play__groups::-webkit-scrollbar { display: none; }
+.tv-play__groups::-webkit-scrollbar {
+  display: none;
+}
 .tv-play__group {
   flex: 0 0 auto;
   border: 1px solid var(--divider);
@@ -1223,9 +1125,9 @@ onBeforeUnmount(() => {
   font-family: inherit;
 }
 .tv-play__group--active {
-  border-color: var(--accent);
+  border-color: var(--accent-on-soft);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 .tv-play__eps-head {
@@ -1234,8 +1136,16 @@ onBeforeUnmount(() => {
   gap: 8px;
   margin-bottom: 10px;
 }
-.tv-play__eps-title { font-size: 15px; font-weight: 600; color: var(--text); }
-.tv-play__eps-count { flex: 1; font-size: 11px; color: var(--text-secondary); }
+.tv-play__eps-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tv-play__eps-count {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 .tv-play__eps-order {
   border: 1px solid var(--divider);
   border-radius: 12px;
@@ -1246,32 +1156,72 @@ onBeforeUnmount(() => {
   font-family: inherit;
 }
 
-.tv-play__eps-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-.tv-play__ep {
-  height: 38px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--text);
-  font-size: 12px;
-  font-family: inherit;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 6px;
-}
-.tv-play__ep:active { opacity: 0.7; }
-.tv-play__ep--active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+/* 简介：默认三行，够长才给「展开」。 */
+.tv-play__desc {
+  margin-top: 18px;
 }
 
-/* ---------- 倍速面板 / 选集抽屉 ---------- */
+.tv-play__desc-text {
+  margin: 0;
+  font-size: calc(13px * var(--app-font-scale));
+  line-height: 1.7;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tv-play__desc--open .tv-play__desc-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.tv-play__desc-toggle {
+  margin-top: 2px;
+  height: 32px;
+  padding: 0;
+  color: var(--accent);
+  font-size: calc(13px * var(--app-font-scale));
+}
+
+.tv-play__eps-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+
+.tv-play__eps-strip::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * 编号方块：参考图里爱奇艺 / 芒果都是用方块网格选集的，长名字（HD国语版）
+ * 塞不进一行，而且一屏只能放四个。
+ */
+.tv-play__ep-btn {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  font-size: calc(15px * var(--app-font-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-play__ep-btn--active {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 500;
+}
+/* ---------- 选集抽屉 ---------- */
 
 .tv-play__mask {
   position: fixed;
@@ -1282,36 +1232,11 @@ onBeforeUnmount(() => {
   flex-direction: column;
   justify-content: flex-end;
 }
-.tv-play__sheet {
-  padding: 14px 16px calc(18px + var(--safe-bottom));
-  border-radius: 14px 14px 0 0;
-  background: var(--bg);
-}
-.tv-play__sheet-title {
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  text-align: center;
-}
-.tv-play__sheet-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  height: 42px;
-  border: 0;
-  border-radius: 8px;
-  padding: 0 12px;
-  background: transparent;
-  color: var(--text);
-  font-size: 14px;
-  font-family: inherit;
-}
-.tv-play__sheet-item--active { color: var(--accent); font-weight: 600; }
 
 .tv-play__drawer {
   position: absolute;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
   top: 0;
   right: 0;
   bottom: 0;
@@ -1327,7 +1252,11 @@ onBeforeUnmount(() => {
   padding: calc(12px + var(--safe-top)) 14px 10px;
   border-bottom: 1px solid var(--divider);
 }
-.tv-play__drawer-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.tv-play__drawer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
 .tv-play__drawer-close {
   display: flex;
   align-items: center;
@@ -1345,7 +1274,9 @@ onBeforeUnmount(() => {
   padding: 10px 14px 2px;
   scrollbar-width: none;
 }
-.tv-play__drawer-groups::-webkit-scrollbar { display: none; }
+.tv-play__drawer-groups::-webkit-scrollbar {
+  display: none;
+}
 .tv-play__drawer-list {
   flex: 1;
   min-height: 0;
@@ -1353,6 +1284,8 @@ onBeforeUnmount(() => {
   -webkit-overflow-scrolling: touch;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  /* 行高交给内容：不写 start 的话行会被容器高度拉伸，几集之间空出大片间隙。 */
+  align-content: start;
   gap: 8px;
   padding: 12px 14px calc(16px + var(--safe-bottom));
 }
@@ -1371,7 +1304,7 @@ onBeforeUnmount(() => {
 }
 .tv-play__drawer-ep--active {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 </style>

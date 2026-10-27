@@ -272,27 +272,26 @@ async function clearCache(): Promise<void> {
 <template>
   <div class="src-page">
     <header class="src-header">
-      <button class="src-back" aria-label="返回" @click="router.back()">
+      <button class="src-back tap-target" aria-label="返回" @click="router.back()">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="src-title">书源管理</span>
-      <button class="src-header-action" @click="showImport = true">导入</button>
+      <button class="src-header-action tap-target" @click="showImport = true">导入</button>
     </header>
 
     <main class="src-body">
       <div class="src-group">
-        <div class="src-row">
+        <button
+          class="src-row src-row--toggle"
+          role="switch"
+          :aria-checked="store.networkEnabled"
+          @click="toggleNetwork"
+        >
           <span class="src-label">网络书源</span>
-          <button
-            class="toggle"
-            :class="{ on: store.networkEnabled }"
-            role="switch"
-            :aria-checked="store.networkEnabled"
-            @click="toggleNetwork"
-          >
+          <span class="toggle" :class="{ on: store.networkEnabled }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
+          </span>
+        </button>
         <p class="src-hint">
           默认关闭。开启后仅在搜索、加入书架、阅读未缓存章节、书源体检时联网；书源地址均可在下方查看。
           从链接导入是手动发起的一次请求，不受这个开关限制。
@@ -463,10 +462,12 @@ async function clearCache(): Promise<void> {
 
 .src-back {
   position: absolute;
-  left: 8px;
-  bottom: 2px;
-  width: 38px;
-  height: 38px;
+  /* 44×44 hit box; the glyph stays 24 and moves with it (-3px each side keeps
+     the optical centre where the 38px version had it). */
+  left: 5px;
+  bottom: -1px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -482,11 +483,16 @@ async function clearCache(): Promise<void> {
 
 .src-header-action {
   position: absolute;
-  right: 12px;
-  bottom: 8px;
+  right: 8px;
+  bottom: 0;
+  /* 44px tall target for a 14px text button. */
+  display: flex;
+  align-items: center;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 8px;
   font-size: calc(14px * var(--app-font-scale));
   color: var(--accent);
-  padding: 6px 4px;
 }
 
 .src-body {
@@ -553,6 +559,22 @@ async function clearCache(): Promise<void> {
   gap: 12px;
   padding: 0 16px;
   min-height: 52px;
+  /* Same model as the settings list: the row is the switch. */
+  width: 100%;
+  text-align: left;
+}
+
+.src-row--toggle {
+  cursor: pointer;
+}
+
+.src-row--toggle .toggle {
+  pointer-events: none;
+}
+
+.src-row--toggle:active {
+  opacity: 1;
+  background: var(--bg-secondary);
 }
 
 .src-label {
@@ -873,7 +895,7 @@ async function clearCache(): Promise<void> {
 
 .src-sheet__btn--primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .src-sheet__btn:disabled {

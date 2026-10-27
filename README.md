@@ -4,7 +4,14 @@
 
 项目是纯本地应用，没有账号、书城后台、云同步，所有书和阅读数据都保存在设备本地（Android 用 SQLite，浏览器预览用 IndexedDB）。
 
-![微读界面预览：书架、阅读、目录](assets/screenshots/overview.png)
+**应用不内置任何书源或视频源。** 书要自己导入，影视源要在「视频源管理」里自己粘贴接口地址——仓库和安装包都不附带源列表，避免把第三方站点的可用性、合规性绑进这个项目。
+
+<p align="center">
+  <img src="assets/screenshots/shelf.png" width="22%" alt="书架" />
+  <img src="assets/screenshots/reader.png" width="22%" alt="阅读页" />
+  <img src="assets/screenshots/tv-player.png" width="22%" alt="播放页" />
+  <img src="assets/screenshots/tv-detail.png" width="22%" alt="影视详情" />
+</p>
 
 ## 功能
 
@@ -19,9 +26,10 @@
 - **在线书源**（默认关闭）：导入 legado 规则书源，搜索、加入书架、按需抓取章节正文，源站数据不进本地书库以外的任何服务器。
 - **备份 / 恢复**：整库导出为 zip（书籍、进度、书签、划线、设置、原始文件），换机或清数据后可一键恢复。
 - **个人页**：在读 / 读完 / 笔记 / 书签统计、累计阅读时长、本地占用与配额预警。
-- **移动端适配**：Android 返回键、状态栏 / 导航栏安全区、防锁屏 / 横屏 / 音量键翻页、触觉反馈、深色模式、应用内确认弹窗。
+- **移动端适配**：Android 返回键、状态栏 / 导航栏 / 左右切边安全区（挖孔屏、刘海屏、横屏侧边凹陷都不会压住图标和按钮）、防锁屏 / 横屏 / 音量键翻页、触觉反馈、深色模式、应用内确认弹窗。
 - **默认不联网**：所有数据本地存储；网络书源与云端音色都需要用户主动开启。
-- **影视**：在「我 → 视频源管理」添加苹果 CMS 视频源后，聚合搜索、详情、多线路剧集与 HLS 播放；源与进度独立存放，不写书库。底部「影视」入口默认隐藏，需在「系统设置 → 显示影视入口」打开。
+- **影视**：在「我 → 视频源管理」自行添加苹果 CMS 视频源后，多源聚合搜索、详情、多线路剧集、HLS 播放与自动连播；播放页有编号选集条、倍速、全屏横屏。源与播放进度独立存放，不写书库。底部「影视」入口默认隐藏，需在「系统设置 → 显示影视入口」打开。
+- **投屏**：播放页控制栏的投屏按钮会搜索同一 Wi-Fi 下的电视 / 盒子（DLNA / UPnP AV），选中即把当前集推到电视上播；手机侧改为「正在投屏到 XXX」，可随时停止。换集时电视跟着换。
 
 ## 技术栈
 
@@ -33,14 +41,17 @@
 - SQLite（Android，`@capacitor-community/sqlite`）/ IndexedDB（浏览器与测试）
 - JSZip（EPUB 解析、备份打包）
 - ArtPlayer + hls.js（影视播放）
+- 投屏：自研 Capacitor 插件，`java.net` + OkHttp 直连 SSDP / SOAP（不依赖 Cast SDK 与 Google Play 服务）
 
 ## 目录
 
 ```text
 src/
-├── views/                 # 书架 / 发现 / 我 / 阅读器 / 目录 / 设置 / 字体选择 / 书源
+├── views/                 # 书架 / 我 / 搜索 / 阅读器 / 目录 / 设置 / 字体选择 / 书源
+│   └── tv/                # 影视首页 / 搜索 / 详情 / 播放
 ├── components/            # 图标、TabBar、封面、导入浮层、加载动画、确认弹窗
-│   └── reader/            # 阅读器顶栏、底栏、字体 / 主题 / 进度 / 笔记 / 目录 / 听书
+│   ├── reader/            # 阅读器顶栏、底栏、字体 / 主题 / 进度 / 笔记 / 目录 / 听书
+│   └── tv/                # 投屏设备选择面板
 ├── audio/                 # 听书：分句、播放状态机、设备语音引擎桥
 ├── utils/                 # 解析、导入、指纹、IndexedDB、进度、划线、备份、原生桥接、弹窗
 │   └── source/            # 规则解释器、网络层、四段管线
@@ -48,7 +59,7 @@ src/
 ├── router/                # 路由与 Tab 注册表
 ├── styles/                # 主题变量与全局移动端样式
 ├── types/                 # 数据模型
-android/                   # Capacitor Android 壳（MainActivity / Gradle / 本地 TTS 插件）
+android/                   # Capacitor Android 壳（MainActivity / Gradle / 本地 TTS 与投屏插件）
 tests/                     # 单元测试 + CDP 浏览器端到端测试
 ```
 
@@ -86,13 +97,14 @@ Android 构建需要 JDK 21 和本机 Android SDK；SDK 路径写在 `android/lo
 ## 测试
 
 ```bash
-npm test          # 23 套单元测试
+npm test          # 24 套单元测试
 npm run typecheck # vue-tsc，检查 src 源码
 npm run lint      # ESLint（Vue + TypeScript）
 npm run test:e2e  # 真实 Chrome 端到端（需要先启动 dev server）
 ```
 
-`test:e2e` 使用 Chrome DevTools Protocol，在 400×890 / @3x 视口下验证分页、交互、Tab 切换、弹窗和划线链路。
+`test:e2e` 使用 Chrome DevTools Protocol，在 400×890 / @3x 视口下验证分页、交互、Tab 切换、弹窗和划线链路；另有 `tests/tabbar.browser.mjs`（底栏与转场帧率）和 `tests/listen-background.browser.mjs`（后台听书）。
+`tests/device*.mjs` 是真机驱动：连 adb 转发出来的 WebView 调试口，可以点按、填表、截图，用来验证只在 Android 上才有的能力（投屏、原生栏、全屏）。
 
 ## 数据存储
 
@@ -120,7 +132,7 @@ Android 使用 SQLite（表结构见 `src/utils/storage/sqlite-driver.ts`）；�
 
 ## 范围说明
 
-本项目刻意不做：在线书城运营、账号登录、付费会员、云同步、社交关注。底部默认是「书架 / 我」两个入口（「影视」需在系统设置中开启），搜索从书架进入独立页面；书库默认只筛选本地书，影视源需自行添加且与书库数据隔离。听书默认使用设备自带语音引擎，也可选云端音色；在线书源默认关闭，需用户主动开启。
+本项目刻意不做：在线书城运营、账号登录、付费会员、云同步、社交关注，也不内置书源 / 视频源。底部默认是「书架 / 我」两个入口（「影视」需在系统设置中开启），搜索从书架进入独立页面；书库默认只筛选本地书，影视源需自行添加且与书库数据隔离。听书默认使用设备自带语音引擎，也可选云端音色；在线书源默认关闭，需用户主动开启。
 
 ## 说明
 

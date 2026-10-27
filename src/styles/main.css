@@ -10,11 +10,22 @@
    where a slightly lighter tint keeps contrast legible.
    ============================================================ */
 :root {
-  /* Brand */
-  --accent: #1b88ee;
-  --accent-press: #1478d6;
-  --accent-soft: rgba(27, 136, 238, 0.10);
-  --accent-soft-strong: rgba(27, 136, 238, 0.18);
+  /* Brand
+   *
+   * One accent value serves both roles — text/icon colour on a light surface
+   * and the fill under white text — so it has to clear 4.5:1 against white in
+   * *both* directions. #1B88EE did neither (3.62:1 as text, 3.62:1 under white
+   * labels); #0E6FC7 sits at 5.10:1 either way.
+   *
+   * `--on-accent` is what text on an accent fill uses. In the dark theme the
+   * accent is lifted for contrast, which makes white text on it impossible
+   * (2.68:1) — so dark mode switches the label to near-black instead of white.
+   */
+  --accent: #0e6fc7;
+  --accent-press: #0b5ca8;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(14, 111, 199, 0.10);
+  --accent-soft-strong: rgba(14, 111, 199, 0.18);
 
   /* Surfaces */
   --bg: #FFFFFF;
@@ -31,13 +42,45 @@
    * rgb(0,0,2) against the title row's rgb(107,107,118).
    */
   --text-body: #1A1A1A;
-  --text-secondary: #999999;
+  /*
+   * Secondary chrome text: list subtitles, counts, helper paragraphs, inactive
+   * tabs. WeRead itself uses #999 here, which measures 2.85:1 on white and
+   * 2.61:1 on the page canvas — below the 4.5:1 floor for body-sized text, and
+   * most of it is 11–13px. #6A6A6A is the lightest grey that still clears the
+   * floor on *both* surfaces (5.15:1 on white, 4.72:1 on #F4F5F7).
+   */
+  --text-secondary: #6a6a6a;
+  /*
+   * Placeholders sit on a *tinted* field, not on white, so they need their own
+   * value: --text-secondary on the search pill measured 4.33:1.
+   */
+  --text-placeholder: #5f5f5f;
+  /*
+   * Text drawn on an accent-tinted surface (`--accent-soft`) loses about a stop
+   * of contrast against the tint; this darker step buys it back (5.0:1 on a 10%
+   * tint, 6.3:1 on white).
+   */
+  --accent-on-soft: #0a5aa5;
   /*
    * Page titles (书架 / 设置). Measured off the reference screenshot at
    * rgb(107,107,118) — darker than a secondary label, lighter than body copy.
    */
   --text-title: #6B6B76;
   --text-inverse: #FFFFFF;
+
+  /*
+   * 我 page stat tiles. Four hues that all clear 4.5:1 as a glyph on their own
+   * tint — the previous set hard-coded four hex values in the component, two of
+   * which were the same blue.
+   */
+  --stat-reading: #1f8a4d;
+  --stat-reading-soft: #e6f3eb;
+  --stat-finished: #0e6fc7;
+  --stat-finished-soft: #e4eef9;
+  --stat-note: #6b4bc4;
+  --stat-note-soft: #ece7f9;
+  --stat-bookmark: #a8641a;
+  --stat-bookmark-soft: #f7ede1;
 
   /* Lines & elevation */
   --divider: #EEEEEE;
@@ -47,7 +90,7 @@
      is what separates chrome from content. */
   --bottom-bar-bg: #FFFFFF;
   /* Inactive tab icons/labels; lifted in the black theme for contrast. */
-  --tabbar-inactive: #999999;
+  --tabbar-inactive: #6a6a6a;
 
   /* Layout */
   /* WeRead's bar is 56dp, which is also a comfortable minimum touch target. */
@@ -64,6 +107,12 @@
   /* One inset per edge: whichever of the native bar / CSS safe area is larger. */
   --safe-top: max(var(--statusbar-height), env(safe-area-inset-top, 0px));
   --safe-bottom: max(var(--nav-inset), env(safe-area-inset-bottom, 0px));
+  /*
+   * 左右安全区。竖屏时通常是 0（挖孔在顶部，由 --safe-top 处理），
+   * 横屏时刘海/挖孔会跑到侧边，这时页面内容不能贴着物理边缘。
+   */
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
   /*
    * The page surface at ~95% opacity, for the strips that have to fade text out
    * (reader status line in scroll mode). Kept in sync with --bg per theme.
@@ -93,12 +142,15 @@
   --bg-page: #EDE2CB;
   --text: #5B4636;
   --text-body: #4A3728;
-  --text-secondary: #A08B72;
+  /* 5.49:1 on the paper canvas, 6.45:1 on a white card — the warm grey that was
+     here (#A08B72) measured 2.78:1 and read as a smudge. */
+  --text-secondary: #6B5C4A;
   --text-inverse: #FFFFFF;
   --divider: #DDD0B8;
   --shadow: rgba(91, 70, 54, 0.06);
   --topbar-bg: #FFFFFF;
   --bottom-bar-bg: #FFFFFF;
+  --tabbar-inactive: #6B5C4A;
   --surface-fade: rgba(245, 236, 217, 0.94);
 }
 
@@ -109,12 +161,14 @@
   --bg-page: #BCDDBC;
   --text: #2E5E31;
   --text-body: #234D26;
-  --text-secondary: #6B9E6F;
+  /* 5.08:1 on the green canvas; #6B9E6F measured 2.32:1. */
+  --text-secondary: #3F6342;
   --text-inverse: #FFFFFF;
   --divider: #A8CFAA;
   --shadow: rgba(46, 94, 49, 0.06);
   --topbar-bg: #FFFFFF;
   --bottom-bar-bg: #FFFFFF;
+  --tabbar-inactive: #3F6342;
   --surface-fade: rgba(200, 230, 201, 0.94);
 }
 
@@ -125,18 +179,22 @@
   --bg-page: #121212;
   --text: #BBBBBB;
   --text-body: #C9C9C9;
-  --text-secondary: #666666;
+  /* Dark mode inverts the problem: grey has to be *lifted*, not pressed down.
+     #666 sat at 3.03:1 on #1A1A1A — invisible in the reference sense. */
+  --text-secondary: #9a9a9a;
   --text-title: #9A9AA6;
   --text-inverse: #FFFFFF;
   --divider: #333333;
   --shadow: rgba(0, 0, 0, 0.3);
   --topbar-bg: #1F1F1F;
   --bottom-bar-bg: #1F1F1F;
-  --tabbar-inactive: #808082;
+  --tabbar-inactive: #9a9a9a;
   --surface-fade: rgba(26, 26, 26, 0.94);
-  /* Brand blue at full saturation is too dark on #1A1A1A; lift it. */
-  --accent: #4AA3f5;
+  /* Brand blue at full saturation is too dark on #1A1A1A; lift it. White label
+     text on the lifted blue would be 2.68:1, so fills flip to dark labels. */
+  --accent: #4AA3F5;
   --accent-press: #3b93e6;
+  --on-accent: #101010;
   --accent-soft: rgba(74, 163, 245, 0.16);
   --accent-soft-strong: rgba(74, 163, 245, 0.26);
 }
@@ -213,6 +271,32 @@ textarea {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/*
+ * Tap target.
+ *
+ * Several controls are deliberately small on screen because the reference is —
+ * 21px text buttons in the shelf title row, 31px sort tabs, 27px catalog tabs.
+ * Their *hit* area is a separate concern: WCAG 2.5.5 asks for 44×44, and a
+ * thumb cannot reliably land on 21px.
+ *
+ * The pseudo-element grows the target around the visual box, painted in
+ * transparent, so nothing moves. It only works where the surrounding row has
+ * slack — where it does not (stacked 21px rows), the row itself is given real
+ * height instead.
+ */
+.tap-target {
+  position: relative;
+}
+.tap-target::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -255,6 +339,12 @@ input {
   background: none;
   font: inherit;
   color: inherit;
+}
+
+/* The UA default (rgba grey) lands around 3:1 on a tinted field. */
+::placeholder {
+  color: var(--text-placeholder);
+  opacity: 1;
 }
 
 input[type='range'] {

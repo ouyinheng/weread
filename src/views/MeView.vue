@@ -30,13 +30,17 @@ const noteCount = ref(0)
 const reading = computed(() => bookStore.books.filter(b => !b.finished && b.progress > 0).length)
 const finished = computed(() => bookStore.books.filter(b => b.finished).length)
 const bookmarks = computed(() => bookmarkStore.bookmarks.length)
-const durationText = computed(() => (totalMs.value > 0 ? formatDuration(totalMs.value) : '—'))
+/* 「—」 reads as a failed load; say what it means instead. */
+const durationText = computed(() => (totalMs.value > 0 ? formatDuration(totalMs.value) : '暂无记录'))
 
 interface StatItem {
   icon: IconName
   label: string
   value: string
+  /** Zero still reads as a number; the tone carries the "nothing here" part. */
+  muted: boolean
   color: string
+  soft: string
 }
 
 /**
@@ -45,37 +49,26 @@ interface StatItem {
  * Empty states use WeRead's own wording instead of a bare zero.
  */
 const stats = computed<StatItem[]>(() => [
-  {
-    icon: 'book-open',
-    label: '在读',
-    value: reading.value ? `${reading.value} 本` : '暂无在读的书',
-    color: '#33B36B',
-  },
-  {
-    icon: 'check-circle',
-    label: '读完',
-    value: finished.value ? `${finished.value} 本` : '暂无读完的书',
-    color: '#2F8FEA',
-  },
-  {
-    icon: 'note',
-    label: '笔记',
-    value: noteCount.value ? `${noteCount.value} 个` : '尚未留下笔记',
-    color: '#2F8FEA',
-  },
-  {
-    icon: 'bookmark',
-    label: '书签',
-    value: bookmarks.value ? `${bookmarks.value} 个` : '暂无书签',
-    color: '#9B59D0',
-  },
+  { icon: 'book-open', label: '在读', value: `${reading.value} 本`, muted: reading.value === 0, color: 'var(--stat-reading)', soft: 'var(--stat-reading-soft)' },
+  { icon: 'check-circle', label: '读完', value: `${finished.value} 本`, muted: finished.value === 0, color: 'var(--stat-finished)', soft: 'var(--stat-finished-soft)' },
+  { icon: 'note', label: '笔记', value: `${noteCount.value} 个`, muted: noteCount.value === 0, color: 'var(--stat-note)', soft: 'var(--stat-note-soft)' },
+  { icon: 'bookmark', label: '书签', value: `${bookmarks.value} 个`, muted: bookmarks.value === 0, color: 'var(--stat-bookmark)', soft: 'var(--stat-bookmark-soft)' },
 ])
 
+/**
+ * Bytes for humans.
+ *
+ * The old version stopped at MB, so a 10 GB quota rendered as "10240.0 MB" —
+ * a number that reads as a bug. Units now climb, and the decimal count follows
+ * the magnitude: 11.3 KB, 4.7 MB, 10 GB (never 10.0 GB).
+ */
 function formatBytes(n: number): string {
   if (!n) return '0 B'
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
+  const v = n / 1024 ** i
+  const digits = i === 0 || v >= 10 ? 0 : 1
+  return `${v.toFixed(digits)} ${units[i]}`
 }
 
 /** Report what the local database actually occupies instead of guessing. */
@@ -155,12 +148,14 @@ onActivated(() => {
 
       <div class="me__stats">
         <div v-for="s in stats" :key="s.label" class="me__card me__stat">
-          <span class="me__stat-icon" :style="{ background: s.color }">
+          <span class="me__stat-icon" :style="{ background: s.soft, color: s.color }">
             <Icon :name="s.icon" :size="16" :width="2.2" />
           </span>
           <span class="me__stat-text">
             <span class="me__stat-label">{{ s.label }}</span>
-            <span class="me__stat-value">{{ s.value }}</span>
+            <span class="me__stat-value" :class="{ 'me__stat-value--muted': s.muted }">{{
+              s.value
+            }}</span>
           </span>
         </div>
       </div>
@@ -168,18 +163,9 @@ onActivated(() => {
       <!-- 近 30 天阅读与存储引擎不在「我的」展示：数据仍在本地记录，只是不占首页。 -->
 
       <div class="me__card me__rows">
-        <button
-          class="me__row me__row--link"
-          @click="router.push({ name: 'settings', query: { tab: 'reading' } })"
-        >
-          <span class="me__row-label">阅读设置</span>
-          <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
-        </button>
-        <button
-          class="me__row me__row--link"
-          @click="router.push({ name: 'settings', query: { tab: 'system' } })"
-        >
-          <span class="me__row-label">系统设置</span>
+        <!-- 设置页自己的分段控件负责「阅读 / 系统」，这里只留一个入口。 -->
+        <button class="me__row me__row--link" @click="router.push({ name: 'settings' })">
+          <span class="me__row-label">设置</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
       </div>
@@ -309,7 +295,6 @@ onActivated(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
   flex-shrink: 0;
 }
 
@@ -327,11 +312,16 @@ onActivated(() => {
 }
 
 .me__stat-value {
-  font-size: calc(11.5px * var(--app-font-scale));
-  color: var(--text-secondary);
+  font-size: calc(12px * var(--app-font-scale));
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A zero still shows as a number; the tone is what says "nothing yet". */
+.me__stat-value--muted {
+  color: var(--text-secondary);
 }
 
 /* 30-day reading chart removed from this page; its styles went with it. */

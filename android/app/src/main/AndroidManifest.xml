@@ -45,9 +45,30 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!--
+          听书常驻播放。
+
+          `stopWithTask="false"` is the point of this declaration: 返回 / 切到别的 app
+          都不能打断朗读，只有把任务从最近列表里划掉（onTaskRemoved）才停。
+          mediaPlayback 类型是 Android 14+ 的硬性要求；启动时页面在前台，符合
+          前台服务启动限制。
+        -->
+        <service
+            android:name=".ListenService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false" />
     </application>
 
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 投屏靠 SSDP 组播发现局域网里的电视/盒子 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

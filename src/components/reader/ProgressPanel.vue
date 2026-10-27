@@ -241,7 +241,7 @@ function step(delta: number) {
   color: var(--text);
 }
 .pp-action--on {
-  color: var(--accent);
+  color: var(--accent-on-soft);
   background: var(--accent-soft);
 }
 

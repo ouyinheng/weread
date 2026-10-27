@@ -92,8 +92,10 @@ withDefaults(
       with a short dash either side, reading as "-O-".
     -->
     <template v-else-if="name === 'progress'">
-      <circle cx="12" cy="12" r="5.1" />
-      <path d="M3.1 12h3.6M17.3 12h3.6" />
+      <!-- Half-filled ring. The old glyph (small circle + two dashes) read as a
+           toggle switch sitting in a row of navigation icons. -->
+      <circle cx="12" cy="12" r="7.4" stroke-opacity="0.28" />
+      <path d="M12 4.6a7.4 7.4 0 010 14.8" />
     </template>
     <!-- 亮度: sun with eight rays -->
     <template v-else-if="name === 'brightness'">
@@ -108,7 +110,12 @@ withDefaults(
       <path d="M12 6.6v12.6" />
     </template>
     <!-- 书架 tab (alternative: closed books) -->
-    <path v-else-if="name === 'book'" d="M4.4 4.8h6.2v14.4H4.4zM13.4 4.8h6.2v14.4h-6.2z" />
+    <!-- One closed book with a spine, not two anonymous boxes: this glyph is
+         what the empty shelf shows at 46px. -->
+    <template v-else-if="name === 'book'">
+      <path d="M6.4 4.4h9a2.6 2.6 0 012.6 2.6v12.6H9a2.6 2.6 0 01-2.6-2.6z" />
+      <path d="M6.4 16.9h11.6" />
+    </template>
     <!-- 我 tab -->
     <template v-else-if="name === 'person'">
       <circle cx="12" cy="8.1" r="3.7" />
@@ -188,16 +195,27 @@ withDefaults(
       <path d="M12 5.6c2.6-1.3 5.7-1.5 8.4-.4v12.4c-2.7-1.1-5.8-.9-8.4.4z" fill="currentColor" stroke="none" />
     </template>
     <template v-else-if="name === 'tab-shelf'">
-      <!-- Upper book: round spine on the left, fore-edge bitten in on the right. -->
-      <path d="M6.7 2.7h10.8a4.2 4.2 0 000 8.4H6.7a4.2 4.2 0 010-8.4z" fill="currentColor" stroke="none" />
-      <!-- Lower book: mirrored, so the pair reads as a stack seen from the side. -->
-      <path d="M6.9 13.5h10.8a4.2 4.2 0 010 8.4H6.9a4.2 4.2 0 000-8.4z" fill="currentColor" stroke="none" />
+      <!-- Books standing on a shelf. Earlier versions stacked two rounded bars,
+           which at 26px collapsed into an "S" (gap too small) or two unrelated
+           pills (gap too large). A shelf line plus upright spines says 书架
+           without relying on the gap.
+           Everything is a filled shape — no stroke — so this glyph keeps the
+           same weight as the other two tab icons. -->
+      <path d="M6.0 8.2h3.4v10.4H6.0z" fill="currentColor" stroke="none" />
+      <path d="M11.0 5.6h3.4v13H11.0z" fill="currentColor" stroke="none" />
+      <path d="M3.8 18.4h16.4v2H3.8z" fill="currentColor" stroke="none" />
     </template>
     <template v-else-if="name === 'tab-tv'">
       <!-- Screen with a play cut-out; the knock-out uses the bar colour so the
            glyph reads on both the white and black tab bars. -->
       <path d="M4.6 4.4h14.8a2.2 2.2 0 012.2 2.2v10.8a2.2 2.2 0 01-2.2 2.2H4.6a2.2 2.2 0 01-2.2-2.2V6.6a2.2 2.2 0 012.2-2.2z" fill="currentColor" stroke="none" />
       <path d="M10.2 8.6l5.1 3.4-5.1 3.4z" fill="var(--bottom-bar-bg)" stroke="none" />
+    </template>
+    <!-- Outline screen + play: the filled tab glyph turns into a solid grey
+         block at empty-state sizes. -->
+    <template v-else-if="name === 'media'">
+      <rect x="3.4" y="5.2" width="17.2" height="13.6" rx="2.6" />
+      <path d="M10.4 9.4l4.6 2.6-4.6 2.6z" />
     </template>
     <template v-else-if="name === 'tab-audio'">
       <circle cx="12" cy="12" r="8.4" />

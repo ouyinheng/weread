@@ -159,25 +159,23 @@ function metaOf(item: TvItem): string {
 <template>
   <div class="tv tab-page">
     <header class="tv__top">
-      <div class="tv__head">
-        <h1 class="tv__title"></h1>
-        <!-- <h1 class="tv__title">影视</h1> -->
-        <div></div>
-        <!-- <button class="tv__manage" aria-label="管理视频源" @click="goSources">
-          <Icon name="gear" :size="19" />
-          <span>管理</span>
-        </button> -->
-      </div>
       <button class="tv__search" @click="goSearch">
         <Icon name="search" :size="17" />
         <span class="tv__search-text">搜电影、剧集、综艺</span>
       </button>
+      <!-- Same order as the shelf: search pill first, then the title row.
+           The title element was here but empty, which is why this tab started
+           90px higher than 书架 and had no way into 视频源管理. -->
+      <div class="tv__head">
+        <h1 class="tv__title">影视</h1>
+        <button class="tv__manage" @click="goSources">管理视频源</button>
+      </div>
     </header>
 
     <main class="tv__body">
       <div v-if="!hasSources" class="tv__empty">
         <div class="tv__empty-icon">
-          <Icon name="tab-tv" :size="46" :width="1.2" />
+          <Icon name="media" :size="48" :width="0.95" />
         </div>
         <p class="tv__empty-title">还没有视频源</p>
         <p class="tv__empty-desc">添加苹果 CMS 接口地址后即可搜索播放</p>
@@ -298,24 +296,27 @@ function metaOf(item: TvItem): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  /* 44px band like the shelf's title row, so switching tabs does not shift the
+     content origin. */
+  min-height: 44px;
+  margin-top: 4px;
 }
 .tv__title {
   margin: 0;
-  font-size: 23px;
-  font-weight: 650;
-  color: var(--text);
-  letter-spacing: 0.2px;
+  /* Matches 书架 (20px / 600 / --text-title). */
+  font-size: calc(20px * var(--app-font-scale));
+  font-weight: 600;
+  color: var(--text-title);
 }
 .tv__manage {
   display: flex;
   align-items: center;
-  gap: 3px;
+  height: 44px;
   border: 0;
-  padding: 4px 2px 4px 8px;
+  padding: 0 2px 0 8px;
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
+  color: var(--text);
+  font-size: calc(15px * var(--app-font-scale));
   font-family: inherit;
 }
 .tv__manage:active {
@@ -327,10 +328,10 @@ function metaOf(item: TvItem): string {
   align-items: center;
   gap: 7px;
   width: 100%;
-  height: 38px;
+  height: 44px;
   padding: 0 12px;
   border: 0;
-  border-radius: 19px;
+  border-radius: 22px;
   background: var(--bg);
   color: var(--text-secondary);
   font-family: inherit;
@@ -341,7 +342,7 @@ function metaOf(item: TvItem): string {
   opacity: 0.75;
 }
 .tv__search-text {
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .tv__body {
@@ -377,11 +378,12 @@ function metaOf(item: TvItem): string {
 }
 .tv__empty-btn {
   margin-top: 20px;
+  min-height: 44px;
   border: 0;
   border-radius: 20px;
   padding: 9px 22px;
   background: var(--accent);
-  color: var(--text-inverse);
+  color: var(--on-accent);
   font-size: 14px;
   font-family: inherit;
 }
@@ -433,12 +435,12 @@ function metaOf(item: TvItem): string {
   padding: 6px 14px;
   background: var(--bg-secondary);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
 }
 .tv-chip--on {
   background: var(--accent);
-  color: var(--text-inverse);
+  color: var(--on-accent);
 }
 .tv-chip:active {
   opacity: 0.7;
@@ -664,7 +666,7 @@ function metaOf(item: TvItem): string {
   border: 0;
   background: transparent;
   color: var(--accent);
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
 }
 </style>

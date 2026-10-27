@@ -44,7 +44,13 @@ try {
       bodyBg: getComputedStyle(document.querySelector('.app')).backgroundColor,
     }
   })()`)
-  check('accent is #1b88ee', tokens.accent.toLowerCase() === '#1b88ee', tokens.accent)
+  /* Light and dark resolve the brand to different values (dark lifts it for
+     contrast), so assert the token is one of the two rather than a literal. */
+  check(
+    'accent resolves to a brand step',
+    ['#0e6fc7', '#4aa3f5'].includes(tokens.accent.toLowerCase()),
+    tokens.accent
+  )
   check('page canvas token set', !!tokens.page, JSON.stringify(tokens))
 
   /* ---------- 2. tab bar is persistent and outside the view ---------- */
@@ -59,15 +65,22 @@ try {
       activeColor: getComputedStyle(document.querySelector('.tabbar__item--active')).color,
     }
   })()`)
-  check('3 tabs', structure.tabs === 3, structure.tabs)
-  check('tab order matches the registry', JSON.stringify(structure.labels) === JSON.stringify(['发现','书架','我']), JSON.stringify(structure.labels))
+  /* 发现 was removed (its route redirects to search) and 影视 is opt-in, so the
+     default registry is two tabs. */
+  check('2 tabs by default', structure.tabs === 2, structure.tabs)
+  check('tab order matches the registry', JSON.stringify(structure.labels) === JSON.stringify(['书架','我']), JSON.stringify(structure.labels))
   check('tab bar outside the routed view', structure.barInsideView === false, JSON.stringify(structure))
-  check('active tab uses brand colour', structure.activeColor === 'rgb(27, 136, 238)', structure.activeColor)
+  const accentRgb = (() => {
+    const h = tokens.accent.replace('#', '')
+    const n = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16))
+    return `rgb(${n[0]}, ${n[1]}, ${n[2]})`
+  })()
+  check('active tab uses brand colour', structure.activeColor === accentRgb, `${structure.activeColor} vs ${accentRgb}`)
 
   /* ---------- 3. switching: identity + state sync *within* the transition ---------- */
   const switchResult = await page.evaluate(`(async () => {
     const barBefore = document.querySelector('.tabbar')
-    const shelfBefore = document.querySelector('.discover')
+    const meBefore = document.querySelector('.me')
     const tabs = [...document.querySelectorAll('.tabbar__item')]
     const byLabel = (l) => tabs.find(t => t.textContent.trim() === l)
 
@@ -82,10 +95,10 @@ try {
     const mid = {
       ms: performance.now() - t0,
       activeLabel: document.querySelector('.tabbar__item--active .tabbar__label')?.textContent.trim(),
-      leavingExists: !!document.querySelector('.discover'),
+      leavingExists: !!document.querySelector('.me'),
       enteringExists: !!document.querySelector('.shelf'),
       barSame: document.querySelector('.tabbar') === barBefore,
-      shelfSame: document.querySelector('.discover') === shelfBefore,
+      meSame: document.querySelector('.me') === meBefore,
       // Both layers must be painted mid-transition: that is what "no blank frame" means.
       paintedNodes: document.querySelectorAll('.app__viewport *').length,
     }
@@ -93,8 +106,8 @@ try {
     await new Promise(r => setTimeout(r, 400))
     const settled = {
       activeLabel: document.querySelector('.tabbar__item--active .tabbar__label')?.textContent.trim(),
-      leavingGone: !document.querySelector('.discover'),
-      discoverPresent: !!document.querySelector('.shelf'),
+      leavingGone: !document.querySelector('.me'),
+      shelfPresent: !!document.querySelector('.shelf'),
       barSame: document.querySelector('.tabbar') === barBefore,
     }
     return { mid, settled }
@@ -107,14 +120,14 @@ try {
   check('transition keeps a painted layer', switchResult.mid.paintedNodes > 10, JSON.stringify(switchResult.mid))
   check('tab bar survives the switch (same node)', switchResult.mid.barSame && switchResult.settled.barSame, JSON.stringify({ mid: switchResult.mid.barSame, settled: switchResult.settled.barSame }))
   check('outgoing page removed after settle', switchResult.settled.leavingGone, JSON.stringify(switchResult.settled))
-  check('incoming page mounted', switchResult.settled.discoverPresent, JSON.stringify(switchResult.settled))
+  check('incoming page mounted', switchResult.settled.shelfPresent, JSON.stringify(switchResult.settled))
 
   /* ---------- 4. switching back keeps the cached shelf instance ---------- */
   // Switch away and back to prove <KeepAlive> kept the shelf instance.
   await page.evaluate(`(async () => {
     const tabs = [...document.querySelectorAll('.tabbar__item')]
     const byLabel = (l) => tabs.find(t => t.textContent.trim() === l)
-    byLabel('发现').click()
+    byLabel('我').click()
     await new Promise(r => setTimeout(r, 360))
     byLabel('书架').click()
     await new Promise(r => setTimeout(r, 360))
@@ -160,15 +173,19 @@ try {
 
   /* ---------- 5b. easing shape: no jump-cut ---------- */
   const curve = await page.evaluate(`(async () => {
-    const t = [...document.querySelectorAll('.tabbar__item')]
+    const items = [...document.querySelectorAll('.tabbar__item')]
+    const active = document.querySelector('.tabbar__item--active .tabbar__label')?.textContent.trim()
+    // Switch to whichever tab is *not* active, and watch that page leave —
+    // hard-coding the pair made this check depend on the previous section.
+    const leaving = active === '书架' ? '.shelf' : '.me'
+    const target = items.find(x => x.textContent.trim() !== active)
     const samples = []
-    const target = [...document.querySelectorAll('.tabbar__item')].find(x => x.textContent.trim() === '发现')
+    if (!target) return samples
     const t0 = performance.now()
     target.click()
     for (let i = 0; i < 18; i++) {
       await new Promise(r => requestAnimationFrame(r))
-      // The outgoing page is the one whose opacity is animating down.
-      const out = document.querySelector('.shelf')
+      const out = document.querySelector(leaving)
       if (out) samples.push({ t: performance.now() - t0, op: +getComputedStyle(out).opacity })
     }
     return samples
@@ -192,7 +209,8 @@ try {
   })()`)
   await page.evaluate(`(async () => {
     const tabs = [...document.querySelectorAll('.tabbar__item')]
-    tabs[2].click(); await new Promise(r => setTimeout(r, 300))
+    // Two tabs in the registry (发现 removed, 影视 opt-in): bounce 书架 → 我 → 书架.
+    tabs[1].click(); await new Promise(r => setTimeout(r, 300))
     tabs[0].click(); await new Promise(r => setTimeout(r, 300))
   })()`)
   const historyAfter = await page.evaluate(`(() => ({ length: history.length }))()`)

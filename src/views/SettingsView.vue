@@ -53,8 +53,18 @@ function saveFontScale(): void {
 }
 
 const appVersion = '1.0.0'
-/** 阅读设置只改阅读页；系统设置才会作用于整个应用。「我的」页两个入口各进一页。 */
-const isSystem = route.query.tab === 'system'
+/** 阅读设置只改阅读页；系统设置才会作用于整个应用。 */
+const SETTINGS_TABS = [
+  { id: 'reading', label: '阅读' },
+  { id: 'system', label: '系统' },
+] as const
+const activeTab = computed(() => (route.query.tab === 'system' ? 'system' : 'reading'))
+const isSystem = computed(() => activeTab.value === 'system')
+
+function goTab(id: 'reading' | 'system'): void {
+  if (activeTab.value === id) return
+  void router.replace({ name: 'settings', query: id === 'system' ? { tab: 'system' } : {} })
+}
 /** 防锁屏 / 横屏 / 音量键依赖原生桥；浏览器预览里它们不会生效，要说清楚。 */
 const nativeShell = isNativeShell()
 
@@ -170,11 +180,30 @@ function about() {
 <template>
   <div class="settings-page">
     <header class="settings-header">
-      <button class="settings-back" @click="router.back()" aria-label="返回">
+      <button class="settings-back tap-target" @click="router.back()" aria-label="返回">
         <Icon name="back" :size="24" :width="2" />
       </button>
-      <span class="settings-title">{{ isSystem ? '系统设置' : '阅读设置' }}</span>
+      <span class="settings-title">设置</span>
     </header>
+
+    <!--
+      One page, two scopes. Reaching 系统 from 阅读 used to mean backing out to
+      「我」 and coming in again; the switch below keeps both a tap away and the
+      URL (?tab=) is still the source of truth.
+    -->
+    <div class="settings-tabs" role="tablist" aria-label="设置分类">
+      <button
+        v-for="t in SETTINGS_TABS"
+        :key="t.id"
+        class="settings-tab"
+        :class="{ 'settings-tab--on': activeTab === t.id }"
+        role="tab"
+        :aria-selected="activeTab === t.id"
+        @click="goTab(t.id)"
+      >
+        {{ t.label }}
+      </button>
+    </div>
 
     <div class="settings-body">
       <template v-if="!isSystem">
@@ -184,54 +213,50 @@ function about() {
         with the entries that need an account or a cloud service left out.
       -->
       <div class="settings-group">
-        <div class="settings-row settings-row--toggle">
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="s.noAutoLock"
+          @click="store.update({ noAutoLock: !s.noAutoLock })"
+        >
           <span class="settings-label">阅读时不自动锁屏</span>
-          <button
-            class="toggle"
-            :class="{ on: s.noAutoLock }"
-            role="switch"
-            :aria-checked="s.noAutoLock"
-            @click="store.update({ noAutoLock: !s.noAutoLock })"
-          >
+          <span class="toggle" :class="{ on: s.noAutoLock }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
-        <div class="settings-row settings-row--toggle">
+          </span>
+        </button>
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="s.landscape"
+          @click="store.update({ landscape: !s.landscape })"
+        >
           <span class="settings-label">阅读时允许横屏</span>
-          <button
-            class="toggle"
-            :class="{ on: s.landscape }"
-            role="switch"
-            :aria-checked="s.landscape"
-            @click="store.update({ landscape: !s.landscape })"
-          >
+          <span class="toggle" :class="{ on: s.landscape }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
-        <div class="settings-row settings-row--toggle">
+          </span>
+        </button>
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="s.showStatusBar"
+          @click="store.update({ showStatusBar: !s.showStatusBar })"
+        >
           <span class="settings-label">阅读时显示时间和电量</span>
-          <button
-            class="toggle"
-            :class="{ on: s.showStatusBar }"
-            role="switch"
-            :aria-checked="s.showStatusBar"
-            @click="store.update({ showStatusBar: !s.showStatusBar })"
-          >
+          <span class="toggle" :class="{ on: s.showStatusBar }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
-        <div class="settings-row settings-row--toggle">
+          </span>
+        </button>
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="s.volumeKeyTurn"
+          @click="store.update({ volumeKeyTurn: !s.volumeKeyTurn })"
+        >
           <span class="settings-label">使用音量键翻页</span>
-          <button
-            class="toggle"
-            :class="{ on: s.volumeKeyTurn }"
-            role="switch"
-            :aria-checked="s.volumeKeyTurn"
-            @click="store.update({ volumeKeyTurn: !s.volumeKeyTurn })"
-          >
+          <span class="toggle" :class="{ on: s.volumeKeyTurn }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
+          </span>
+        </button>
       </div>
       <p v-if="!nativeShell" class="settings-hint">
         不自动锁屏、允许横屏和音量键翻页由 Android 客户端实现，浏览器预览中不会生效。
@@ -240,32 +265,28 @@ function about() {
       <!-- 听书: the engine itself is the phone's, so there is nothing to set up
            here — only how the reader behaves while it speaks. -->
       <div class="settings-group">
-        <div class="settings-row settings-row--toggle">
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="s.listenFollow"
+          @click="store.update({ listenFollow: !s.listenFollow })"
+        >
           <span class="settings-label">听书时跟随高亮</span>
-          <button
-            class="toggle"
-            :class="{ on: s.listenFollow }"
-            role="switch"
-            :aria-checked="s.listenFollow"
-            aria-label="听书时跟随高亮"
-            @click="store.update({ listenFollow: !s.listenFollow })"
-          >
+          <span class="toggle" :class="{ on: s.listenFollow }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
-        <div class="settings-row settings-row--toggle">
+          </span>
+        </button>
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="s.listenAutoNext"
+          @click="store.update({ listenAutoNext: !s.listenAutoNext })"
+        >
           <span class="settings-label">听完本章自动播下一章</span>
-          <button
-            class="toggle"
-            :class="{ on: s.listenAutoNext }"
-            role="switch"
-            :aria-checked="s.listenAutoNext"
-            aria-label="听完本章自动播下一章"
-            @click="store.update({ listenAutoNext: !s.listenAutoNext })"
-          >
+          <span class="toggle" :class="{ on: s.listenAutoNext }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
+          </span>
+        </button>
       </div>
 
       <!-- Typography entry: the face picker is its own page, like WeRead's. -->
@@ -327,18 +348,17 @@ function about() {
 
       <!-- 功能入口：影视是可选模块，默认不占底栏，需要时再打开。 -->
       <div class="settings-group">
-        <div class="settings-row settings-row--toggle">
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="app.showTvTab"
+          @click="appSettings.update({ showTvTab: !app.showTvTab })"
+        >
           <span class="settings-label">显示影视入口</span>
-          <button
-            class="toggle"
-            :class="{ on: app.showTvTab }"
-            role="switch"
-            :aria-checked="app.showTvTab"
-            @click="appSettings.update({ showTvTab: !app.showTvTab })"
-          >
+          <span class="toggle" :class="{ on: app.showTvTab }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
+          </span>
+        </button>
       </div>
       <p class="settings-hint">
         开启后底部导航显示「影视」。关闭只会隐藏入口，已添加的视频源和观看记录都会保留，仍可从「我 → 视频源管理」进入。
@@ -346,18 +366,17 @@ function about() {
 
       <!-- 网络书源：默认关闭，首次开启时说明会联网 -->
       <div class="settings-group">
-        <div class="settings-row settings-row--toggle">
+        <button
+          class="settings-row settings-row--toggle"
+          role="switch"
+          :aria-checked="sourceStore.networkEnabled"
+          @click="toggleNetworkSources"
+        >
           <span class="settings-label">网络书源</span>
-          <button
-            class="toggle"
-            :class="{ on: sourceStore.networkEnabled }"
-            role="switch"
-            :aria-checked="sourceStore.networkEnabled"
-            @click="toggleNetworkSources"
-          >
+          <span class="toggle" :class="{ on: sourceStore.networkEnabled }" aria-hidden="true">
             <span class="toggle__dot" />
-          </button>
-        </div>
+          </span>
+        </button>
       </div>
 
       <!-- Library -->
@@ -428,12 +447,43 @@ function about() {
   flex-shrink: 0;
 }
 
+/* Segmented switch between the two scopes. */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 16px 10px;
+  padding: 3px;
+  border-radius: 11px;
+  /* --bg-secondary is within 3 levels of the page canvas in both themes, so the
+     track (and therefore the white pill inside it) disappeared. */
+  background: rgba(120, 120, 128, 0.16);
+  flex-shrink: 0;
+}
+
+.settings-tab {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 8px;
+  font-size: calc(14px * var(--app-font-scale));
+  color: var(--text-secondary);
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+.settings-tab--on {
+  background: var(--bg-panel);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: 0 1px 2px var(--shadow);
+}
+
 .settings-back {
   position: absolute;
-  left: 8px;
-  bottom: 2px;
-  width: 38px;
-  height: 38px;
+  /* 44×44 hit box; the glyph stays 24 and moves with it (-3px each side keeps
+     the optical centre where the 38px version had it). */
+  left: 5px;
+  bottom: -1px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -474,15 +524,34 @@ function about() {
   padding: 0 16px;
   min-height: 52px;
   border-bottom: 0.5px solid var(--divider);
+  /* Toggle rows are <button> now: the whole 52px row is the target, which is
+     what every iOS/Android settings list does. Only the switch is painted. */
+  width: 100%;
+  text-align: left;
 }
 
 .settings-row:last-child {
   border-bottom: none;
 }
 
+.settings-row--toggle {
+  cursor: pointer;
+}
+
+/* The switch is decoration once the row owns the tap. */
+.settings-row--toggle .toggle {
+  pointer-events: none;
+}
+
+/* Global `button:active` dims to 0.6 — too loud for a full-width row. */
+.settings-row--toggle:active {
+  opacity: 1;
+  background: var(--bg-secondary);
+}
+
 .settings-hint {
   padding: 0 6px;
-  font-size: calc(11.5px * var(--app-font-scale));
+  font-size: calc(12px * var(--app-font-scale));
   line-height: 1.7;
   color: var(--text-secondary);
 }
@@ -656,7 +725,7 @@ function about() {
 
 .theme-option--on {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on-soft);
 }
 
 </style>

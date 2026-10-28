@@ -6,7 +6,7 @@
  * 所以按真实格式逐个锁住。
  */
 import { normalizeApi, parsePlayGroups } from '../src/utils/tv/parse.ts'
-import { visibleTabs } from '../src/router/tabs.ts'
+import { homeTab, visibleTabs } from '../src/router/tabs.ts'
 
 let fail = 0
 const check = (name, cond, extra = '') => {
@@ -51,18 +51,19 @@ check('dropped entries do not shift names', dirty[0].episodes[1].name === '第3�
 check('empty raw -> no groups', parsePlayGroups('', 'm3u8').length === 0)
 check('undefined raw -> no groups', parsePlayGroups(undefined, undefined).length === 0)
 
-/* ---------- 影视入口开关 ---------- */
+/* ---------- 底栏入口开关（书架 / 影视 各一个） ---------- */
 
-check(
-  'tv tab hidden by default',
-  visibleTabs(false).map(t => t.name).join(',') === 'shelf,me',
-  visibleTabs(false).map(t => t.name).join(',')
-)
-check(
-  'tv tab shown once enabled',
-  visibleTabs(true).map(t => t.name).join(',') === 'shelf,tv,me',
-  visibleTabs(true).map(t => t.name).join(',')
-)
+const bar = v => visibleTabs(v).map(t => t.name).join(',')
+
+check('tv tab hidden by default', bar({ showShelfTab: true, showTvTab: false }) === 'shelf,me', bar({ showShelfTab: true, showTvTab: false }))
+check('tv tab shown once enabled', bar({ showShelfTab: true, showTvTab: true }) === 'shelf,tv,me', bar({ showShelfTab: true, showTvTab: true }))
+check('shelf tab hideable', bar({ showShelfTab: false, showTvTab: false }) === 'me', bar({ showShelfTab: false, showTvTab: false }))
+check('shelf hidden, tv kept', bar({ showShelfTab: false, showTvTab: true }) === 'tv,me', bar({ showShelfTab: false, showTvTab: true }))
+
+/* 隐藏当前 tab 后的落点：第一个还在的 tab，「我」永远兜底。 */
+check('home prefers shelf', homeTab({ showShelfTab: true, showTvTab: true }) === 'shelf', homeTab({ showShelfTab: true, showTvTab: true }))
+check('home skips hidden shelf', homeTab({ showShelfTab: false, showTvTab: true }) === 'tv', homeTab({ showShelfTab: false, showTvTab: true }))
+check('home never empty', homeTab({ showShelfTab: false, showTvTab: false }) === 'me', homeTab({ showShelfTab: false, showTvTab: false }))
 
 console.log(fail ? `\n${fail} FAILURES` : '\nALL PASS')
 process.exit(fail ? 1 : 0)

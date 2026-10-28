@@ -102,6 +102,8 @@ export const useAppSettingsStore = defineStore('appSettings', () => {
     fontScale: 1,
     fontFamily: 'system',
     theme: 'system',
+    // 书架是主功能，默认占底栏；和影视一样可以收起来（只隐藏入口，书还在）。
+    showShelfTab: true,
     // 影视是可选模块：默认不占底栏，用户在系统设置里主动开启后才出现。
     showTvTab: false,
   })
@@ -120,6 +122,8 @@ export const useAppSettingsStore = defineStore('appSettings', () => {
         // 旧记录只有布尔开关：关掉跟随系统时相当于固定浅色。
         app.value.theme = 'light'
       }
+      // 老记录没有这两个键：书架保持默认开启，影视保持默认关闭。
+      if (typeof saved.showShelfTab === 'boolean') app.value.showShelfTab = saved.showShelfTab
       if (typeof saved.showTvTab === 'boolean') app.value.showTvTab = saved.showTvTab
     }
     loaded.value = true

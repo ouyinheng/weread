@@ -25,15 +25,35 @@ export const TABS: TabDef[] = [
 /* 故意放宽成 Set<string>：调用方传进来的是路由名（string），不是 TabName。 */
 export const TAB_NAMES = new Set<string>(TABS.map(t => t.name))
 
+/** Which tabs the user still wants in the bottom bar (系统设置 → 功能入口). */
+export interface TabVisibility {
+  showShelfTab: boolean
+  showTvTab: boolean
+}
+
 /**
  * Tabs actually shown in the bottom bar.
  *
- * 影视 is opt-in: most readers only read, and a permanent third slot for a
- * module they never opened is noise. Turning it on in 系统设置 adds the tab;
- * turning it off only hides the entrance — sources and watch history stay.
+ * 书架 is on by default and 影视 is opt-in, but both are hideable: a reader who
+ * lives in the video module should not be stuck with a shelf tab, and vice
+ * versa. Hiding only removes the entrance — books, sources and watch history
+ * all stay, and the switch brings the tab (and the page) right back.
  */
-export function visibleTabs(showTvTab: boolean): TabDef[] {
-  return TABS.filter(tab => tab.name !== 'tv' || showTvTab)
+export function visibleTabs({ showShelfTab, showTvTab }: TabVisibility): TabDef[] {
+  return TABS.filter(tab => {
+    if (tab.name === 'shelf') return showShelfTab
+    if (tab.name === 'tv') return showTvTab
+    return true
+  })
+}
+
+/**
+ * Where to land when the current tab got hidden. 我 is never hideable, so this
+ * always resolves; falling back to `me` also keeps the router out of a redirect
+ * loop if the tab list ever ends up empty.
+ */
+export function homeTab(visibility: TabVisibility): TabName {
+  return visibleTabs(visibility)[0]?.name ?? 'me'
 }
 
 export function isTabRoute(name: unknown): boolean {

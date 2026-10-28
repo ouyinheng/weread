@@ -76,11 +76,14 @@ try {
     items: document.querySelectorAll('.shelf__item').length,
     titles: [...document.querySelectorAll('.shelf__item-title')].map(e => e.textContent.trim()),
     sortTabs: [...document.querySelectorAll('.shelf__tab')].map(e => e.textContent.trim()),
-    progressBadges: document.querySelectorAll('.shelf__badge').length,
+    progressBadges: document.querySelectorAll('.shelf__badge--progress').length,
+    anyBadge: document.querySelectorAll('.shelf__badge').length,
   }))()`)
   check('shelf shows seeded books', shelf.items === 2, shelf.items)
   check('shelf titles correct', shelf.titles.includes('端到端测试书'), JSON.stringify(shelf.titles))
-  check('shelf shows progress badges', shelf.progressBadges >= 1, shelf.progressBadges)
+  // 书架只标「已读完」，不展示百分比：进度属于阅读页信息。
+  check('shelf hides reading progress', shelf.progressBadges === 0, shelf.progressBadges)
+  check('unfinished books carry no badge', shelf.anyBadge === 0, shelf.anyBadge)
   check('shelf sort tabs functional set', shelf.sortTabs.length === 7, JSON.stringify(shelf.sortTabs))
 
   /* ---------- 4. sort tabs actually reorder ---------- */

@@ -23,7 +23,7 @@ import ListenBar from './components/reader/ListenBar.vue'
 import ImportOverlay from './components/ImportOverlay.vue'
 import DialogHost from './components/DialogHost.vue'
 import { applyStatusBarBackground, applyStatusBarStyle, isNativeShell } from './utils/native'
-import { isTabRoute } from './router/tabs'
+import { homeTab, isTabRoute, visibleTabs } from './router/tabs'
 import { uiState } from './utils/ui-state'
 import { listenSession } from './audio/session'
 
@@ -39,7 +39,7 @@ const appSettings = useAppSettingsStore()
  */
 const showsTabBar = computed(() => isTabRoute(route.name) && !uiState.hideTabBar)
 
-/** The video player is a full-bleed black stage, like the reader is a paper one. */
+/** The video player owns a full-bleed black stage; the page under it is ordinary app chrome. */
 const isTvPlayer = computed(() => String(route.name || '') === 'tvPlay')
 
 /** Pages that draw their own full-bleed background instead of the app canvas. */
@@ -114,7 +114,9 @@ const appTheme = computed(() => {
   return systemDark.value ? 'black' : 'white'
 })
 const activeTheme = computed(() => {
-  if (isTvPlayer.value) return 'black'
+  // 播放页跟应用主题，不吃阅读页的纸张色：视频舞台是黑的，但下方
+  // 信息区（标题/标签/选集）是普通页面，参考图里就是白底。
+  if (isTvPlayer.value) return appTheme.value
   return isFullBleed.value ? settings.settings.theme : appTheme.value
 })
 const isDarkTheme = computed(() => activeTheme.value === 'black')
@@ -191,15 +193,26 @@ watch(
 watch(() => route.fullPath, syncNativeChrome, { flush: 'post' })
 
 /*
- * 影视 tab is opt-in. If it is off but the route is still its tab root — a cold
- * deep link, or the user just turned the switch off — fall back to the shelf so
- * the page never shows a tab bar with no selected tab.
+ * Both tab roots can be hidden from 系统设置. If the active route is a tab the
+ * user just turned off — or a cold deep link to one — fall back to the first
+ * tab still in the bar, so the page never shows a bar with no selected tab.
  */
 watch(
-  [() => appSettings.loaded, () => appSettings.app.showTvTab, () => route.name],
+  [
+    () => appSettings.loaded,
+    () => appSettings.app.showShelfTab,
+    () => appSettings.app.showTvTab,
+    () => route.name,
+  ],
   () => {
-    if (appSettings.loaded && !appSettings.app.showTvTab && route.name === 'tv') {
-      void router.replace({ name: 'shelf' })
+    if (!appSettings.loaded) return
+    const visibility = {
+      showShelfTab: appSettings.app.showShelfTab,
+      showTvTab: appSettings.app.showTvTab,
+    }
+    const shown = visibleTabs(visibility).map(tab => tab.name as string)
+    if (isTabRoute(route.name) && !shown.includes(String(route.name))) {
+      void router.replace({ name: homeTab(visibility) })
     }
   }
 )

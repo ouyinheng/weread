@@ -22,7 +22,12 @@ const route = useRoute()
 const router = useRouter()
 const appSettings = useAppSettingsStore()
 
-const tabs = computed(() => visibleTabs(appSettings.app.showTvTab))
+const tabs = computed(() =>
+  visibleTabs({
+    showShelfTab: appSettings.app.showShelfTab,
+    showTvTab: appSettings.app.showTvTab,
+  })
+)
 const activeName = computed(() => String(route.name || ''))
 
 function isActive(name: string): boolean {

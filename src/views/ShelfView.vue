@@ -42,13 +42,20 @@ const sortKey = ref<SortKey>('recent')
 const sortedBooks = computed(() => {
   const list = [...store.books]
   switch (sortKey.value) {
-    case 'name': return list.sort((a, b) => a.title.localeCompare(b.title, 'zh'))
-    case 'author': return list.sort((a, b) => (a.author || '').localeCompare(b.author || '', 'zh'))
-    case 'progress': return list.sort((a, b) => b.progress - a.progress)
-    case 'words': return list.sort((a, b) => b.wordCount - a.wordCount)
-    case 'imported': return list.sort((a, b) => b.importedAt - a.importedAt)
-    case 'format': return list.sort((a, b) => a.format.localeCompare(b.format) || a.title.localeCompare(b.title, 'zh'))
-    default: return list.sort((a, b) => b.lastReadAt - a.lastReadAt)
+    case 'name':
+      return list.sort((a, b) => a.title.localeCompare(b.title, 'zh'))
+    case 'author':
+      return list.sort((a, b) => (a.author || '').localeCompare(b.author || '', 'zh'))
+    case 'progress':
+      return list.sort((a, b) => b.progress - a.progress)
+    case 'words':
+      return list.sort((a, b) => b.wordCount - a.wordCount)
+    case 'imported':
+      return list.sort((a, b) => b.importedAt - a.importedAt)
+    case 'format':
+      return list.sort((a, b) => a.format.localeCompare(b.format) || a.title.localeCompare(b.title, 'zh'))
+    default:
+      return list.sort((a, b) => b.lastReadAt - a.lastReadAt)
   }
 })
 
@@ -69,7 +76,7 @@ function toggleSelected(id: string) {
 }
 
 /** Select-mode replaces the tab bar with its own action bar. */
-watch(selectMode, (on) => {
+watch(selectMode, on => {
   uiState.hideTabBar = on
   if (!on) selected.value = new Set()
 })
@@ -79,7 +86,9 @@ onDeactivated(() => {
   uiState.hideTabBar = false
   selectMode.value = false
 })
-onBeforeUnmount(() => { uiState.hideTabBar = false })
+onBeforeUnmount(() => {
+  uiState.hideTabBar = false
+})
 
 /**
  * Open a book with the standard "cover grows into the page" motion.
@@ -106,7 +115,9 @@ function openBook(id: string, event?: MouseEvent) {
   // No animation available (reduced motion / no cover node): navigate directly.
   if (!anim) router.push({ name: 'reader', params: { id } })
 
-  anim?.done.then(() => { if (openAnim === anim) openAnim = null })
+  anim?.done.then(() => {
+    if (openAnim === anim) openAnim = null
+  })
 }
 
 /**
@@ -130,7 +141,9 @@ function onItemPressStart(book: Book) {
   // In select mode a long press would fight the tap that toggles the tick.
   if (selectMode.value) return
   if (pressTimer) clearTimeout(pressTimer)
-  pressTimer = setTimeout(() => { menuBook.value = book }, 460)
+  pressTimer = setTimeout(() => {
+    menuBook.value = book
+  }, 460)
 }
 function onItemPressEnd() {
   if (pressTimer) clearTimeout(pressTimer)
@@ -145,6 +158,12 @@ function formatWords(n: number): string {
   if (!n) return '0 字'
   if (n >= 10000) return `${(n / 10000).toFixed(1)} 万字`
   return `${n} 字`
+}
+
+/** "继续阅读" in the long-press menu: same motion as tapping the cover. */
+function continueReading(book: Book) {
+  openBook(book.id)
+  menuBook.value = null
 }
 
 async function restartBook(id: string) {
@@ -167,13 +186,11 @@ async function confirmDelete(book: Book) {
 
 /* ---------- bulk actions (select mode) ---------- */
 const allSelected = computed(
-  () => sortedBooks.value.length > 0 && sortedBooks.value.every(b => selected.value.has(b.id))
+  () => sortedBooks.value.length > 0 && sortedBooks.value.every(b => selected.value.has(b.id)),
 )
 
 function toggleSelectAll() {
-  selected.value = allSelected.value
-    ? new Set()
-    : new Set(sortedBooks.value.map(b => b.id))
+  selected.value = allSelected.value ? new Set() : new Set(sortedBooks.value.map(b => b.id))
 }
 
 async function removeSelected() {
@@ -234,7 +251,9 @@ onMounted(() => {
         class="shelf__tab"
         :class="{ 'shelf__tab--active': sortKey === t.key }"
         @click="sortKey = t.key"
-      >{{ t.label }}</button>
+      >
+        {{ t.label }}
+      </button>
     </div>
 
     <main class="shelf__body">
@@ -266,10 +285,8 @@ onMounted(() => {
         >
           <div class="shelf__cover">
             <BookCover :book="book" />
+            <!-- 只标「已读完」：封面上的百分比属于阅读页信息，书架不展示。 -->
             <span v-if="book.finished" class="shelf__badge">已读完</span>
-            <span v-else-if="book.progress > 0" class="shelf__badge shelf__badge--progress">
-              {{ Math.round(book.progress) }}%
-            </span>
           </div>
           <span class="shelf__item-title">{{ book.title }}</span>
         </div>
@@ -280,9 +297,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="store.books.length" class="shelf__foot">
-        {{ store.books.length }} 本 · 全部本地保存
-      </div>
+      <div v-if="store.books.length" class="shelf__foot">{{ store.books.length }} 本</div>
     </main>
 
     <!-- Book context menu -->
@@ -290,9 +305,11 @@ onMounted(() => {
       <div class="sheet">
         <div class="sheet__header">
           <span class="sheet__title">{{ menuBook.title }}</span>
-          <span class="sheet__meta">{{ menuBook.author || '未知作者' }} · {{ formatWords(menuBook.wordCount) }}</span>
+          <span class="sheet__meta"
+            >{{ menuBook.author || '未知作者' }} · {{ formatWords(menuBook.wordCount) }}</span
+          >
         </div>
-        <button class="sheet__item" @click="openBook(menuBook.id); menuBook = null">继续阅读</button>
+        <button class="sheet__item" @click="continueReading(menuBook)">继续阅读</button>
         <button class="sheet__item" @click="restartBook(menuBook.id)">从头开始</button>
         <button class="sheet__item sheet__item--danger" @click="confirmDelete(menuBook)">移出书架</button>
         <div class="sheet__gap" />
@@ -312,7 +329,9 @@ onMounted(() => {
         class="shelf-actions__btn shelf-actions__btn--danger"
         :disabled="selected.size === 0"
         @click="removeSelected"
-      >移出书架</button>
+      >
+        移出书架
+      </button>
       <button class="shelf-actions__btn" @click="toggleSelectMode">取消</button>
     </div>
   </div>
@@ -441,8 +460,17 @@ onMounted(() => {
 
 .shelf__grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  /* 20dp gutters and a taller row gap, matching WeRead's shelf grid. */
+  /*
+   * 封面卡片是**固定尺寸**，不跟屏幕等比放大：屏幕变宽只会多排一本
+   * （平板 4 本、5 本，横屏更多）。104px 是 400dp 手机上三列的量级。
+   *
+   * 用固定轨道而不是 `minmax(104px, 1fr)`：后者在拖动窗口时会先把书拉大，
+   * 直到塞得下下一列又整排缩回去——就是「放大又缩小」的抖动。剩余的空间
+   * 交给列间距（space-between），封面尺寸始终不变。
+   */
+  --shelf-card-w: 104px;
+  grid-template-columns: repeat(auto-fill, var(--shelf-card-w));
+  justify-content: space-between;
   gap: 32px 20px;
   animation: contentIn 180ms var(--page-easing);
 }
@@ -504,11 +532,6 @@ onMounted(() => {
   backdrop-filter: blur(2px);
 }
 
-.shelf__badge--progress {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
 .shelf__item-title {
   /* The reference's cover captions are 12sp, a step below the 14px body. */
   font-size: calc(12px * var(--app-font-scale));
@@ -545,8 +568,12 @@ onMounted(() => {
 }
 
 @keyframes actionsUp {
-  from { transform: translate3d(0, 100%, 0); }
-  to { transform: translate3d(0, 0, 0); }
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .shelf-actions__btn {
@@ -660,8 +687,12 @@ onMounted(() => {
 }
 
 @keyframes maskIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .sheet {
@@ -673,8 +704,12 @@ onMounted(() => {
 }
 
 @keyframes sheetUp {
-  from { transform: translate3d(0, 100%, 0); }
-  to { transform: translate3d(0, 0, 0); }
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .sheet__header {

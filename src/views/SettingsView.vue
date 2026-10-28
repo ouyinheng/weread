@@ -349,8 +349,19 @@ function about() {
           </div>
         </div>
 
-        <!-- 功能入口：影视是可选模块，默认不占底栏，需要时再打开。 -->
+        <!-- 功能入口：底栏的「书架」「影视」都能收起来，只影响入口，不影响数据。 -->
         <div class="settings-group">
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="app.showShelfTab"
+            @click="appSettings.update({ showShelfTab: !app.showShelfTab })"
+          >
+            <span class="settings-label">显示书架入口</span>
+            <span class="toggle" :class="{ on: app.showShelfTab }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
           <button
             class="settings-row settings-row--toggle"
             role="switch"
@@ -364,8 +375,8 @@ function about() {
           </button>
         </div>
         <p class="settings-hint">
-          开启后底部导航显示「影视」。关闭只会隐藏入口，已添加的视频源和观看记录都会保留，仍可从「我 →
-          视频源管理」进入。
+          关闭只会隐藏底部导航的入口，书籍、阅读进度、视频源和观看记录都保留，需要时回来重新打开即可；隐藏「影视」后仍可从「我
+          → 视频源管理」查看已添加的源。
         </p>
 
         <!-- 网络书源：默认关闭，首次开启时说明会联网 -->

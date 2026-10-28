@@ -1,0 +1,171 @@
+name: Android APK
+
+# 单元测试 / 类型检查 / lint 已经在 ci.yml 里了，这里只负责出安装包。
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 每次 push / PR 出一个 debug 包，直接下下来装手机上看效果。
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # AGP 8.13 + Gradle 8.14 要求 JDK 17+，本机用的也是 21。
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # 缓存 Gradle 发行版与依赖，第二次起能省一两分钟。
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: npm ci
+
+      # 与本地同一条链路：vue-tsc -b && vite build
+      - name: Web 构建
+        run: npm run build
+
+      # 不用 npx：直接走 node_modules 里的 CLI，免得它再去 registry 查一遍。
+      # 同时会把 capacitor.settings.gradle、cordova 插件工程、assets/public 生成出来。
+      - name: 同步到 Android 工程
+        run: ./node_modules/.bin/cap sync android
+
+      - name: 补齐 SDK 平台
+        run: |
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then
+            yes | sdkmanager --licenses > /dev/null || true
+            sdkmanager "platforms;android-36"
+          fi
+
+      - name: 打 debug 包
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weread-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # 正式包必须签名，签名材料只放仓库 Secrets，绝不入库。
+  # 需要四个 secret：
+  #   ANDROID_KEYSTORE_BASE64    android/weread-release.jks 的 base64
+  #   ANDROID_KEYSTORE_PASSWORD  storePassword
+  #   ANDROID_KEY_ALIAS          keyAlias
+  #   ANDROID_KEY_PASSWORD       keyPassword
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: npm ci
+
+      - name: Web 构建
+        run: npm run build
+
+      - name: 同步到 Android 工程
+        run: ./node_modules/.bin/cap sync android
+
+      - name: 补齐 SDK 平台
+        run: |
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then
+            yes | sdkmanager --licenses > /dev/null || true
+            sdkmanager "platforms;android-36"
+          fi
+
+      # build.gradle 只在 android/keystore.properties 存在时给 release 变体签名；
+      # 没有就等于打出一个装不上的包。所以缺 secret 时不硬失败，而是退回 debug 包
+      # 并在 Release 里标明「未签名」，免得第一次打 tag 就红一片。
+      - name: 检查签名材料
+        id: sign
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::没有 ANDROID_KEYSTORE_BASE64，本次只出 debug 包（调试密钥签名，不适合分发）。"
+          fi
+
+      - name: 恢复签名材料
+        if: steps.sign.outputs.ready == 'yes'
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > android/weread-release.jks
+          printf 'storeFile=weread-release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$STORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > android/keystore.properties
+
+      - name: 打 release 包
+        if: steps.sign.outputs.ready == 'yes'
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: 打 debug 包（无签名材料时的兜底）
+        if: steps.sign.outputs.ready == 'no'
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: 收集产物
+        run: |
+          mkdir -p out
+          if [ "${{ steps.sign.outputs.ready }}" = "yes" ]; then
+            cp android/app/build/outputs/apk/release/*.apk "out/weread-${GITHUB_REF_NAME}.apk"
+          else
+            cp android/app/build/outputs/apk/debug/*.apk "out/weread-${GITHUB_REF_NAME}-debug.apk"
+          fi
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weread-release-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      # 打 tag 时顺手建 GitHub Release，APK 直接挂在页面上可下载。
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: out/*.apk
+          generate_release_notes: true

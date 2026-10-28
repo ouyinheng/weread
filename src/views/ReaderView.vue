@@ -28,6 +28,7 @@ import { reasonText } from '@/audio/tts'
 import { fontStackOf, backgroundOf } from '@/utils/fonts'
 import { addReadingTime, getReadingTime, formatDuration } from '@/utils/reading-time'
 import { needsRebuild, rebuildBook } from '@/utils/library'
+import { tidyChapterHtml } from '@/utils/reader-html'
 import type { BookSearchHit } from '@/utils/book-search'
 import { useBookSearch } from '@/composables/useBookSearch'
 import { isNativeShell, EDGE_GESTURE_INSET, applyReaderNativeMode, resetReaderNativeMode } from '@/utils/native'
@@ -523,7 +524,8 @@ function onPressEnd() {
  */
 const renderedHtml = computed(() => {
   const body = chapterHtml.value.get(currentChapter.value) || ''
-  const marked = applyHighlights(body, highlightRanges.value)
+  // 先瘦身再划线：两件事都只动标签不动文字，字符偏移仍然对得上。
+  const marked = applyHighlights(tidyChapterHtml(body), highlightRanges.value)
   const wrapped = `<div class="reader__body">${marked}</div>`
   const title = (chapterList.value[currentChapter.value]?.title || '').trim()
   if (!title) return wrapped
@@ -2203,6 +2205,10 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
 }
 .reader__pages--spacing :deep(.reader__body p) {
   margin: 0 0 0.85em;
+}
+/* 源文件里的空段落 / 连续换行不占版面（见 utils/reader-html.ts）。 */
+.reader__pages :deep(.reader__blank) {
+  display: none;
 }
 .reader__pages--indent :deep(p) {
   text-indent: 2em;

@@ -4,9 +4,9 @@
     <!-- Base application theme. Colours are literal: there is no colors.xml in
          this project, and a dangling @color/ reference fails the build. -->
     <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
-        <item name="colorPrimary">#1b88ee</item>
-        <item name="colorPrimaryDark">#1b88ee</item>
-        <item name="colorAccent">#1b88ee</item>
+        <item name="colorPrimary">#3e6bf0</item>
+        <item name="colorPrimaryDark">#3e6bf0</item>
+        <item name="colorAccent">#3e6bf0</item>
     </style>
 
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">

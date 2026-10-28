@@ -1,46 +1,135 @@
 <script setup lang="ts">
 /**
- * 源管理。
+ * 视频源管理。
  *
- * 三种入口，覆盖绝大多数用法：
- *  1. 手动添加：名称 + 苹果 CMS 接口地址；
- *  2. 粘贴导入：LibreTV / TVBox 的源列表 JSON；
- *  3. 测活：拉第一页，确认接口真的能用。
+ * 页面结构和交互都照「书源管理」来：同一个页头（返回 / 标题 / 导入）、同一套
+ * 操作行、搜索框加计数、列表行、底部导入面板。样式用的是共用的
+ * `styles/source-page.css`，两个页面不会各长各的。
+ *
+ * 视频源的差异都在数据层：
+ *  - 只有一种源（苹果 CMS 接口根地址），没有分组、没有缓存；
+ *  - 多一个「测活」，因为它连的是第三方接口，挂掉是常事。
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
 import { useTvStore } from '@/stores/tv'
 import { testSource } from '@/utils/tv/cms'
 import { confirmDialog } from '@/utils/dialog'
+import { HEALTH_COLOR, HEALTH_LABEL } from '@/types/source'
 import type { TvSource } from '@/utils/tv/types'
 
 const router = useRouter()
 const store = useTvStore()
 
-const name = ref('')
-const api = ref('')
-const notice = ref('')
+const sheet = ref(false)
+const tab = ref<'url' | 'paste'>('paste')
+
+const importUrl = ref('')
 const importText = ref('')
-const showImport = ref(false)
-const testing = ref<string>('')
+const importBusy = ref(false)
+const fileInput = ref<HTMLInputElement>()
+const notice = ref('')
+
+const filter = ref('')
+const testing = ref('')
+
+/** 本次会话的测活结果。源本身没有健康字段，测出来只活在这个页面里。 */
+const health = ref<Record<string, boolean>>({})
+const checking = ref(false)
+const progress = ref({ done: 0, total: 0 })
 
 onMounted(() => { void store.load() })
+
+const filtered = computed(() => {
+  const q = filter.value.trim().toLowerCase()
+  const list = store.sources
+  if (!q) return list
+  return list.filter(
+    (s) => s.name.toLowerCase().includes(q) || s.api.toLowerCase().includes(q)
+  )
+})
+
+const dead = computed(() => store.sources.filter((s) => health.value[s.id] === false))
 
 function flash(message: string): void {
   notice.value = message
   window.setTimeout(() => { if (notice.value === message) notice.value = '' }, 2500)
 }
 
-function add(): void {
-  if (!api.value.trim()) {
-    flash('先填接口地址')
-    return
+/** 复用书源的体检配色：0 未检测 / 1 可用 / 3 失效，两个页面的点颜色必须一致。 */
+function healthOf(s: TvSource): number {
+  const h = health.value[s.id]
+  if (h === true) return 1
+  if (h === false) return 3
+  return 0
+}
+
+function dotColor(s: TvSource): string {
+  return HEALTH_COLOR[healthOf(s)]
+}
+
+function healthLabel(s: TvSource): string {
+  if (testing.value === s.id) return '测活中…'
+  // 未检测时补一句怎么测：这一行点了就是测活，不说的话没人会去点。
+  return healthOf(s) === 0 ? `${HEALTH_LABEL[0]} · 点一下测活` : HEALTH_LABEL[healthOf(s)]
+}
+
+async function test(source: TvSource): Promise<void> {
+  if (testing.value) return
+  testing.value = source.id
+  const result = await testSource(source)
+  testing.value = ''
+  health.value = { ...health.value, [source.id]: result.ok }
+  flash(`${source.name}：${result.message}`)
+}
+
+async function checkAll(): Promise<void> {
+  if (checking.value) return
+  checking.value = true
+  progress.value = { done: 0, total: store.sources.length }
+  for (const source of store.sources) {
+    const result = await testSource(source)
+    health.value = { ...health.value, [source.id]: result.ok }
+    progress.value = { done: progress.value.done + 1, total: progress.value.total }
   }
-  store.addSource(name.value, api.value)
-  name.value = ''
-  api.value = ''
-  flash('已添加')
+  checking.value = false
+  const failed = dead.value.length
+  flash(failed ? `测活完成，${failed} 个不可用` : '测活完成，全部可用')
+}
+
+function purgeDead(): Promise<void> {
+  const list = dead.value
+  if (!list.length) return Promise.resolve()
+  return confirmDialog({
+    title: '清除失效源',
+    message: `删除测活失败的 ${list.length} 个源？它们的观看记录也会一并清掉。`,
+    confirmText: '删除',
+    danger: true,
+  }).then((ok) => {
+    if (!ok) return
+    list.forEach((s) => store.removeSource(s.id))
+    flash(`已清除 ${list.length} 个`)
+  })
+}
+
+/** 选文件塞进文本框：让用户能先看一眼再点导入，和书源那边一致。 */
+function pickFile(): void {
+  fileInput.value?.click()
+}
+
+async function onFileChange(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 允许重复选同一个文件
+  if (!file) return
+  try {
+    importText.value = await file.text()
+    tab.value = 'paste'
+    flash(`已读取 ${file.name}`)
+  } catch (err) {
+    flash(`读取失败：${(err as Error).message || '未知错误'}`)
+  }
 }
 
 function remove(source: TvSource): Promise<void> {
@@ -54,13 +143,6 @@ function remove(source: TvSource): Promise<void> {
   })
 }
 
-async function test(source: TvSource): Promise<void> {
-  testing.value = source.id
-  const result = await testSource(source)
-  testing.value = ''
-  flash(`${source.name}：${result.message}`)
-}
-
 /**
  * 兼容三种结构：
  *  - LibreTV 导出：{ customAPIs: [{ name, url }] }
@@ -70,10 +152,10 @@ async function test(source: TvSource): Promise<void> {
 function parseImport(text: string): Array<{ name?: string; api: string }> {
   const data = JSON.parse(text)
   const out: Array<{ name?: string; api: string }> = []
-  const push = (name: unknown, api: unknown) => {
-    if (typeof api !== 'string') return
-    if (!/^https?:\/\//i.test(api)) return
-    out.push({ name: typeof name === 'string' ? name : undefined, api })
+  const push = (n: unknown, a: unknown) => {
+    if (typeof a !== 'string') return
+    if (!/^https?:\/\//i.test(a)) return
+    out.push({ name: typeof n === 'string' ? n : undefined, api: a })
   }
 
   if (Array.isArray(data)) {
@@ -89,299 +171,205 @@ function parseImport(text: string): Array<{ name?: string; api: string }> {
   return out
 }
 
-function doImport(): void {
-  if (!importText.value.trim()) {
-    flash('先粘贴 JSON')
-    return
-  }
-  let list: Array<{ name?: string; api: string }>
+async function doImport(): Promise<void> {
+  if (importBusy.value) return
+  importBusy.value = true
   try {
-    list = parseImport(importText.value)
-  } catch {
-    flash('不是合法 JSON')
-    return
+    let text = importText.value
+    if (tab.value === 'url') {
+      const url = importUrl.value.trim()
+      if (!url) {
+        flash('先填源列表链接')
+        return
+      }
+      const res = await fetch(url, { redirect: 'follow' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      text = await res.text()
+    }
+    if (!text.trim()) {
+      flash(tab.value === 'url' ? '先填源列表链接' : '先粘贴 JSON 或选一个文件')
+      return
+    }
+    let list: Array<{ name?: string; api: string }>
+    try {
+      list = parseImport(text)
+    } catch {
+      flash('不是合法 JSON')
+      return
+    }
+    if (!list.length) {
+      flash('没找到接口地址，检查 JSON 结构')
+      return
+    }
+    const added = store.importSources(list)
+    importText.value = ''
+    importUrl.value = ''
+    sheet.value = false
+    flash(added ? `新增 ${added} 个源` : '这些源都已经在了')
+  } catch (err) {
+    flash(`拉取失败：${(err as Error).message || '未知错误'}`)
+  } finally {
+    importBusy.value = false
   }
-  if (!list.length) {
-    flash('没找到接口地址，检查 JSON 结构')
-    return
-  }
-  const added = store.importSources(list)
-  importText.value = ''
-  showImport.value = false
-  flash(added ? `新增 ${added} 个源` : '这些源都已经在了')
 }
 </script>
 
 <template>
-  <div class="tv-src">
-    <header class="tv-src__bar">
-      <button class="tv-src__back" aria-label="返回" @click="router.back()">
-        <Icon name="back" :size="22" :width="2" />
+  <div class="src-page tv-src-page">
+    <header class="src-header">
+      <button class="src-back tap-target" aria-label="返回" @click="router.back()">
+        <Icon name="back" :size="24" :width="2" />
       </button>
-      <span class="tv-src__title">视频源管理</span>
-      <button class="tv-src__import-btn" @click="showImport = !showImport">
-        {{ showImport ? '收起' : '导入' }}
-      </button>
+      <span class="src-title">视频源管理</span>
+      <button class="src-header-action tap-target" @click="sheet = true">导入</button>
     </header>
 
-    <main class="tv-src__body">
+    <main class="src-body">
       <p v-if="notice" class="tv-src__notice">{{ notice }}</p>
 
-      <section v-if="showImport" class="tv-src__card">
-        <h2 class="tv-src__card-title">粘贴源列表</h2>
-        <textarea
-          v-model="importText"
-          class="tv-src__textarea"
-          rows="6"
-          placeholder='支持 LibreTV 导出的 { "customAPIs": [...] }、TVBox 的 { "sites": [...] }，或 [{ "name": "...", "url": "..." }]'
-        />
-        <button class="tv-src__primary" @click="doImport">导入</button>
-      </section>
-
-      <section class="tv-src__card">
-        <h2 class="tv-src__card-title">添加源</h2>
-        <input v-model="name" class="tv-src__input" type="text" placeholder="名称（可空）" />
-        <input
-          v-model="api"
-          class="tv-src__input"
-          type="url"
-          placeholder="https://example.com/api.php/provide/vod/"
-          inputmode="url"
-          autocapitalize="off"
-          spellcheck="false"
-        />
-        <button class="tv-src__primary" @click="add">添加</button>
-        <p class="tv-src__hint">苹果 CMS V10 的接口根地址，通常以 <code>/api.php/provide/vod/</code> 结尾。</p>
-      </section>
-
-      <section class="tv-src__list">
-        <div class="tv-src__list-head">
-          <span class="tv-src__list-title">全部源</span>
-          <span class="tv-src__list-count">{{ store.sources.length }} 个</span>
-        </div>
-
-        <p v-if="!store.sources.length" class="tv-src__empty">
-          还没有源。手动添加，或从上面的「导入」粘贴一份源列表。
+      <div class="src-group">
+        <p class="src-hint">
+          苹果 CMS V10 的接口根地址，一般以 <code>/api.php/provide/vod/</code> 结尾。
+          视频源与书库分开存放：这里的源只服务「影视」Tab，不影响阅读。
         </p>
+      </div>
 
-        <div v-for="source in store.sources" :key="source.id" class="tv-src__row">
-          <div class="tv-src__row-main">
-            <div class="tv-src__row-head">
-              <span class="tv-src__row-name">{{ source.name }}</span>
-              <button
-                class="toggle"
-                :class="{ on: source.enabled }"
-                role="switch"
-                :aria-checked="source.enabled"
-                @click="store.toggleSource(source.id)"
-              >
-                <span class="toggle__dot" />
-              </button>
-            </div>
-            <span class="tv-src__row-api">{{ source.api }}</span>
-            <div class="tv-src__row-actions">
-              <button class="tv-src__action" :disabled="testing === source.id" @click="test(source)">
-                {{ testing === source.id ? '测试中…' : '测活' }}
-              </button>
-              <button class="tv-src__action tv-src__action--danger" @click="remove(source)">删除</button>
-            </div>
-          </div>
+      <div v-if="store.sources.length" class="src-actions">
+        <button class="src-action" :disabled="checking" @click="checkAll">
+          <template v-if="checking">测活中 {{ progress.done }}/{{ progress.total }}</template>
+          <template v-else>全部测活</template>
+        </button>
+        <button class="src-action" :disabled="checking || !dead.length" @click="purgeDead">
+          清除失效<template v-if="dead.length">（{{ dead.length }}）</template>
+        </button>
+      </div>
+
+      <div v-if="store.sources.length" class="src-listbar">
+        <input v-model="filter" class="src-search" placeholder="搜索源名称或接口地址" spellcheck="false" />
+        <span class="src-count">{{ filtered.length }} / {{ store.sources.length }}</span>
+      </div>
+
+      <div v-if="filtered.length" class="src-group src-group--list">
+        <div v-for="s in filtered" :key="s.id" class="src-item">
+          <button class="src-item__main" @click="test(s)">
+            <span class="src-dot" :style="{ background: dotColor(s) }" />
+            <span class="src-item__text">
+              <span class="src-name">{{ s.name }}</span>
+              <span class="src-meta">{{ s.api }}</span>
+              <span class="src-meta">{{ healthLabel(s) }}</span>
+            </span>
+          </button>
+          <button
+            class="toggle src-toggle"
+            :class="{ on: s.enabled }"
+            role="switch"
+            :aria-checked="s.enabled"
+            :aria-label="`启用 ${s.name}`"
+            @click="store.toggleSource(s.id)"
+          >
+            <span class="toggle__dot" />
+          </button>
+          <button class="src-del" aria-label="删除" @click="remove(s)">
+            <Icon name="trash" :size="16" />
+          </button>
         </div>
-      </section>
+      </div>
+
+      <div v-if="!filtered.length" class="src-empty">
+        {{ filter ? '没有匹配的视频源。' : '还没有视频源。点右上角「导入」，粘贴 JSON、填源列表链接或选文件。' }}
+      </div>
     </main>
+
+    <!-- 导入面板：和书源管理同一套（链接 / 粘贴 / 文件），只是内容换成视频源 -->
+    <div v-if="sheet" class="src-mask" @click.self="sheet = false">
+      <div class="src-sheet">
+        <div class="src-sheet__head">
+          <span class="src-sheet__title">导入视频源</span>
+          <button class="src-sheet__close" aria-label="关闭" @click="sheet = false">
+            <Icon name="close" :size="18" :width="2" />
+          </button>
+        </div>
+
+        <div class="src-sheet__tabs">
+          <button
+            class="src-sheet__tab"
+            :class="{ 'src-sheet__tab--on': tab === 'url' }"
+            @click="tab = 'url'"
+          >
+            链接导入
+          </button>
+          <button
+            class="src-sheet__tab"
+            :class="{ 'src-sheet__tab--on': tab === 'paste' }"
+            @click="tab = 'paste'"
+          >
+            粘贴 JSON
+          </button>
+        </div>
+
+        <template v-if="tab === 'url'">
+          <input
+            v-model="importUrl"
+            class="src-sheet__url"
+            placeholder="https://example.com/sources.json"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+            inputmode="url"
+          />
+          <p class="src-sheet__hint">
+            填一份源列表的直链：LibreTV 导出的 <code>customAPIs</code>、TVBox 的
+            <code>sites</code>，或 <code>[{ "name": …, "url": … }]</code> 数组都认。
+          </p>
+        </template>
+
+        <template v-else>
+          <p class="src-sheet__hint">
+            支持 LibreTV 导出的 <code>{ "customAPIs": […] }</code>、TVBox 的
+            <code>{ "sites": […] }</code>，或 <code>[{ "name": …, "url": … }]</code> 数组。
+          </p>
+
+          <button class="src-sheet__file" @click="pickFile">
+            <Icon name="import" :size="16" :width="1.8" />
+            <span>从文件导入 .json</span>
+          </button>
+          <input
+            ref="fileInput"
+            class="src-sheet__fileinput"
+            type="file"
+            accept=".json,.txt,application/json,text/plain"
+            @change="onFileChange"
+          />
+
+          <textarea
+            v-model="importText"
+            class="src-sheet__input"
+            placeholder='[{"name":"暴风资源","api":"https://example.com/api.php/provide/vod/"}]'
+            spellcheck="false"
+          />
+        </template>
+
+        <p v-if="notice" class="src-sheet__error">{{ notice }}</p>
+
+        <div class="src-sheet__actions">
+          <button class="src-sheet__btn" @click="sheet = false">取消</button>
+          <button class="src-sheet__btn src-sheet__btn--primary" :disabled="importBusy" @click="doImport">
+            {{ importBusy ? '导入中…' : '导入' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.tv-src {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-page);
-}
-
-.tv-src__bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: calc(8px + var(--safe-top)) 10px 8px;
-  background: var(--bg-page);
-}
-.tv-src__back {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-}
-.tv-src__title { flex: 1; font-size: 16px; font-weight: 600; color: var(--text); }
-.tv-src__import-btn {
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 13px;
-  font-family: inherit;
-  padding: 6px 4px;
-}
-
-.tv-src__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 4px 14px calc(24px + var(--safe-bottom));
-}
-
+/* 面板关闭后的操作反馈（新增/清除/测活结果），样式跟着页面走，不另开一套。 */
 .tv-src__notice {
-  margin: 0 0 10px;
-  padding: 8px 10px;
+  margin: 0 0 8px;
+  padding: 8px 12px;
   border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--accent-on-soft);
-  font-size: 12px;
-}
-
-.tv-src__card {
-  margin-bottom: 14px;
-  padding: 14px;
-  border-radius: 10px;
-  background: var(--bg);
-}
-.tv-src__card-title {
-  margin: 0 0 10px;
-  font-size: 14px;
-  font-weight: 600;
+  background: var(--bg-panel);
   color: var(--text);
+  font-size: calc(13px * var(--app-font-scale));
 }
-.tv-src__input,
-.tv-src__textarea {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  margin-bottom: 8px;
-  padding: 9px 10px;
-  border: 1px solid var(--divider);
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-}
-.tv-src__input:focus,
-.tv-src__textarea:focus { border-color: var(--accent); }
-.tv-src__textarea { resize: vertical; line-height: 1.5; }
-.tv-src__primary {
-  width: 100%;
-  height: 38px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 14px;
-  font-family: inherit;
-}
-.tv-src__primary:active { background: var(--accent-press); }
-.tv-src__hint {
-  margin: 8px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-}
-.tv-src__hint code {
-  font-size: 11px;
-  padding: 1px 4px;
-  border-radius: 4px;
-  background: var(--bg-secondary);
-}
-
-.tv-src__list { margin-top: 4px; }
-.tv-src__list-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 8px;
-  padding: 0 2px;
-}
-.tv-src__list-title { font-size: 14px; font-weight: 600; color: var(--text); }
-.tv-src__list-count { font-size: 11px; color: var(--text-secondary); }
-.tv-src__empty {
-  margin: 0;
-  padding: 18px 12px;
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.tv-src__row {
-  margin-bottom: 8px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--bg);
-}
-.tv-src__row-main { min-width: 0; }
-.tv-src__row-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.tv-src__row-name {
-  font-size: 14px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tv-src__row-api {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tv-src__row-actions { display: flex; gap: 8px; margin-top: 10px; }
-.tv-src__action {
-  border: 1px solid var(--divider);
-  border-radius: 14px;
-  padding: 4px 12px;
-  background: var(--bg);
-  color: var(--text);
-  font-size: 12px;
-  font-family: inherit;
-}
-.tv-src__action--danger { color: #d9534f; }
-.tv-src__action:disabled { opacity: 0.5; }
-
-.toggle {
-  flex: 0 0 auto;
-  width: 44px;
-  height: 26px;
-  border: 0;
-  border-radius: 13px;
-  padding: 2px;
-  background: var(--divider);
-  display: flex;
-  align-items: center;
-  transition: background-color 0.18s ease;
-}
-.toggle.on { background: var(--accent); }
-.toggle__dot {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #fff;
-  transform: translateX(0);
-  transition: transform 0.18s ease;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-}
-.toggle.on .toggle__dot { transform: translateX(18px); }
 </style>

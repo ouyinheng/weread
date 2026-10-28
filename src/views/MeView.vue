@@ -20,6 +20,7 @@ const bookmarkStore = useBookmarkStore()
 const sourceStore = useSourceStore()
 const tvStore = useTvStore()
 
+
 const totalMs = ref(0)
 const storageText = ref('—')
 const quotaText = ref('')
@@ -160,15 +161,16 @@ onActivated(() => {
         </div>
       </div>
 
-      <!-- 近 30 天阅读与存储引擎不在「我的」展示：数据仍在本地记录，只是不占首页。 -->
-
+      <!-- 观看记录只留入口，列表和删除在二级页：这页本来就是「看一眼就走」的。 -->
       <div class="me__card me__rows">
-        <!-- 设置页自己的分段控件负责「阅读 / 系统」，这里只留一个入口。 -->
-        <button class="me__row me__row--link" @click="router.push({ name: 'settings' })">
-          <span class="me__row-label">设置</span>
+        <button class="me__row me__row--link" @click="router.push({ name: 'tvHistory' })">
+          <span class="me__row-label">观看记录</span>
+          <span class="me__row-value">{{ tvStore.history.length }} 条</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
       </div>
+
+      <!-- 近 30 天阅读与存储引擎不在「我的」展示：数据仍在本地记录，只是不占首页。 -->
 
       <div class="me__card me__rows">
         <div class="me__row">
@@ -191,6 +193,14 @@ onActivated(() => {
         <button class="me__row me__row--link" @click="router.push({ name: 'tvSources' })">
           <span class="me__row-label">视频源管理</span>
           <span class="me__row-value">{{ tvStore.sources.length }} 个</span>
+          <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
+        </button>
+      </div>
+
+      <!-- 设置放在最后：前面是「看我的数据 / 管我的源」，设置是低频的收尾动作。 -->
+      <div class="me__card me__rows">
+        <button class="me__row me__row--link" @click="router.push({ name: 'settings' })">
+          <span class="me__row-label">设置</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
       </div>
@@ -399,4 +409,5 @@ onActivated(() => {
   line-height: 1.6;
   color: #c0392b;
 }
+
 </style>

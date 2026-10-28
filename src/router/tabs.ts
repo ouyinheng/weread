@@ -2,8 +2,10 @@
  * Tab registry, shared by the router and the tab bar so the two can never
  * disagree about order, labels, or which routes are "lateral" moves.
  */
+export type TabName = 'shelf' | 'tv' | 'me'
+
 export interface TabDef {
-  name: string
+  name: TabName
   path: string
   label: string
 }
@@ -20,7 +22,8 @@ export const TABS: TabDef[] = [
   { name: 'me', path: '/me', label: '我' },
 ]
 
-export const TAB_NAMES = new Set(TABS.map(t => t.name))
+/* 故意放宽成 Set<string>：调用方传进来的是路由名（string），不是 TabName。 */
+export const TAB_NAMES = new Set<string>(TABS.map(t => t.name))
 
 /**
  * Tabs actually shown in the bottom bar.

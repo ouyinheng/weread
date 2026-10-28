@@ -326,7 +326,7 @@ function mount(): void {
     autoplay: true,
     playsInline: true,
     lang: 'zh-cn',
-    theme: '#1b88ee',
+    theme: '#3e6bf0',
     // 自带能力：不自己写触摸逻辑，见文件头注释。
     gesture: true,
     fastForward: true,

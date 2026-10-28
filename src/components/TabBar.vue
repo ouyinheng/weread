@@ -7,21 +7,16 @@
  *
  * Icons are inlined SVG whose colour comes from CSS `currentColor`, not from
  * `v-html` strings built per render — rebuilding three SVG trees on every tap
- * was both a flicker source and a needless layout cost.
+ * was both a flicker source and a needless layout cost. The glyphs themselves
+ * are Remix Icon's line/fill pairs (see TabIcon.vue): selected tab uses the
+ * filled version.
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { visibleTabs } from '@/router/tabs'
 import { useAppSettingsStore } from '@/stores'
-import Icon from '@/components/Icon.vue'
-import type { IconName } from '@/components/icon-names'
+import TabIcon from '@/components/TabIcon.vue'
 import { tapFeedback } from '@/utils/native'
-
-const TAB_ICONS: Record<string, IconName> = {
-  shelf: 'tab-shelf',
-  tv: 'tab-tv',
-  me: 'tab-me',
-}
 
 const route = useRoute()
 const router = useRouter()
@@ -58,7 +53,7 @@ function go(name: string) {
       @click="go(tab.name)"
     >
       <span class="tabbar__icon">
-        <Icon :name="TAB_ICONS[tab.name]" :size="26" :width="1.6" />
+        <TabIcon :name="tab.name" :active="isActive(tab.name)" />
       </span>
       <span class="tabbar__label">{{ tab.label }}</span>
     </button>

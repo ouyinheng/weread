@@ -68,13 +68,16 @@ function goTab(id: 'reading' | 'system'): void {
 /** 防锁屏 / 横屏 / 音量键依赖原生桥；浏览器预览里它们不会生效，要说清楚。 */
 const nativeShell = isNativeShell()
 
-onMounted(() => { sourceStore.load() })
+onMounted(() => {
+  sourceStore.load()
+})
 
 async function toggleNetworkSources() {
   if (!sourceStore.networkEnabled) {
     const ok = await confirmDialog({
       title: '开启网络书源',
-      message: '开启后，搜索、加入书架、阅读未缓存章节和书源体检会向书源站点发起网络请求。书源地址可在「书源管理」中查看。',
+      message:
+        '开启后，搜索、加入书架、阅读未缓存章节和书源体检会向书源站点发起网络请求。书源地址可在「书源管理」中查看。',
       confirmText: '开启',
     })
     if (!ok) return
@@ -110,17 +113,16 @@ async function backupToFile() {
     backupSaving.value = true
     const how = await saveBackup(blob)
     backupSaving.value = false
-    const message = how.mode === 'saved'
-      ? `备份已保存到：${how.path || '文件管理器的下载目录'}。`
-      : how.mode === 'shared'
-        ? '备份文件已交给系统分享，请选择一个保存位置。'
-        : '备份文件已开始下载，请在浏览器的下载目录中查看。'
+    const message =
+      how.mode === 'saved'
+        ? `备份已保存到：${how.path || '文件管理器的下载目录'}。`
+        : how.mode === 'shared'
+          ? '备份文件已交给系统分享，请选择一个保存位置。'
+          : '备份文件已开始下载，请在浏览器的下载目录中查看。'
     await alertDialog({ title: '备份完成', message, confirmText: '知道了' })
   } catch (e) {
     backupSaving.value = false
-    const msg = (e as Error)?.name === 'AbortError'
-      ? '已取消分享。'
-      : ((e as Error)?.message || '导出失败')
+    const msg = (e as Error)?.name === 'AbortError' ? '已取消分享。' : (e as Error)?.message || '导出失败'
     await alertDialog({ title: '备份未完成', message: msg, confirmText: '知道了' })
   }
 }
@@ -165,7 +167,7 @@ function pickRestoreFile() {
 
 const backupPercent = computed(() => {
   if (!backupProgress.total) return 0
-  return Math.min(100, Math.round(backupProgress.current / backupProgress.total * 100))
+  return Math.min(100, Math.round((backupProgress.current / backupProgress.total) * 100))
 })
 
 function about() {
@@ -207,223 +209,225 @@ function about() {
 
     <div class="settings-body">
       <template v-if="!isSystem">
-      <!--
+        <!--
         Reading behaviour: these are app-level policies, not page styling.
         Order follows WeRead's list (不自动锁屏 → 允许横屏 → 时间和电量 → 音量键),
         with the entries that need an account or a cloud service left out.
       -->
-      <div class="settings-group">
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="s.noAutoLock"
-          @click="store.update({ noAutoLock: !s.noAutoLock })"
-        >
-          <span class="settings-label">阅读时不自动锁屏</span>
-          <span class="toggle" :class="{ on: s.noAutoLock }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="s.landscape"
-          @click="store.update({ landscape: !s.landscape })"
-        >
-          <span class="settings-label">阅读时允许横屏</span>
-          <span class="toggle" :class="{ on: s.landscape }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="s.showStatusBar"
-          @click="store.update({ showStatusBar: !s.showStatusBar })"
-        >
-          <span class="settings-label">阅读时显示时间和电量</span>
-          <span class="toggle" :class="{ on: s.showStatusBar }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="s.volumeKeyTurn"
-          @click="store.update({ volumeKeyTurn: !s.volumeKeyTurn })"
-        >
-          <span class="settings-label">使用音量键翻页</span>
-          <span class="toggle" :class="{ on: s.volumeKeyTurn }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-      </div>
-      <p v-if="!nativeShell" class="settings-hint">
-        不自动锁屏、允许横屏和音量键翻页由 Android 客户端实现，浏览器预览中不会生效。
-      </p>
+        <div class="settings-group">
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="s.noAutoLock"
+            @click="store.update({ noAutoLock: !s.noAutoLock })"
+          >
+            <span class="settings-label">阅读时不自动锁屏</span>
+            <span class="toggle" :class="{ on: s.noAutoLock }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="s.landscape"
+            @click="store.update({ landscape: !s.landscape })"
+          >
+            <span class="settings-label">阅读时允许横屏</span>
+            <span class="toggle" :class="{ on: s.landscape }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="s.showStatusBar"
+            @click="store.update({ showStatusBar: !s.showStatusBar })"
+          >
+            <span class="settings-label">阅读时显示时间和电量</span>
+            <span class="toggle" :class="{ on: s.showStatusBar }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="s.volumeKeyTurn"
+            @click="store.update({ volumeKeyTurn: !s.volumeKeyTurn })"
+          >
+            <span class="settings-label">使用音量键翻页</span>
+            <span class="toggle" :class="{ on: s.volumeKeyTurn }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+        </div>
+        <p v-if="!nativeShell" class="settings-hint">
+          不自动锁屏、允许横屏和音量键翻页由 Android 客户端实现，浏览器预览中不会生效。
+        </p>
 
-      <!-- 听书: the engine itself is the phone's, so there is nothing to set up
+        <!-- 听书: the engine itself is the phone's, so there is nothing to set up
            here — only how the reader behaves while it speaks. -->
-      <div class="settings-group">
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="s.listenFollow"
-          @click="store.update({ listenFollow: !s.listenFollow })"
-        >
-          <span class="settings-label">听书时跟随高亮</span>
-          <span class="toggle" :class="{ on: s.listenFollow }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="s.listenAutoNext"
-          @click="store.update({ listenAutoNext: !s.listenAutoNext })"
-        >
-          <span class="settings-label">听完本章自动播下一章</span>
-          <span class="toggle" :class="{ on: s.listenAutoNext }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-      </div>
+        <div class="settings-group">
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="s.listenFollow"
+            @click="store.update({ listenFollow: !s.listenFollow })"
+          >
+            <span class="settings-label">听书时跟随高亮</span>
+            <span class="toggle" :class="{ on: s.listenFollow }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="s.listenAutoNext"
+            @click="store.update({ listenAutoNext: !s.listenAutoNext })"
+          >
+            <span class="settings-label">听完本章自动播下一章</span>
+            <span class="toggle" :class="{ on: s.listenAutoNext }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+        </div>
 
-      <!-- Typography entry: the face picker is its own page, like WeRead's. -->
-      <div class="settings-group">
-        <button class="settings-cell" @click="router.push({ name: 'fontSettings' })">
-          <span class="settings-cell-label">字体</span>
-          <span class="settings-cell-value">{{ fontLabelOf(s.fontFamily) }}</span>
-          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
-        </button>
-      </div>
-
+        <!-- Typography entry: the face picker is its own page, like WeRead's. -->
+        <div class="settings-group">
+          <button class="settings-cell" @click="router.push({ name: 'fontSettings' })">
+            <span class="settings-cell-label">字体</span>
+            <span class="settings-cell-value">{{ fontLabelOf(s.fontFamily) }}</span>
+            <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
+          </button>
+        </div>
       </template>
 
       <template v-else>
-      <!-- 界面外观：只改应用外壳，阅读页的字号/字体/主题仍由阅读设置决定。 -->
-      <div class="settings-group">
-        <button
-          class="settings-cell"
-          @click="router.push({ name: 'fontSettings', query: { scope: 'app' } })"
-        >
-          <span class="settings-cell-label">字体</span>
-          <span class="settings-cell-value">{{ fontLabelOf(app.fontFamily) }}</span>
-          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
-        </button>
+        <!-- 界面外观：只改应用外壳，阅读页的字号/字体/主题仍由阅读设置决定。 -->
+        <div class="settings-group">
+          <button
+            class="settings-cell"
+            @click="router.push({ name: 'fontSettings', query: { scope: 'app' } })"
+          >
+            <span class="settings-cell-label">字体</span>
+            <span class="settings-cell-value">{{ fontLabelOf(app.fontFamily) }}</span>
+            <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
+          </button>
 
-        <div class="settings-row settings-row--scale">
-          <span class="settings-label">字体大小</span>
-          <div class="font-scale">
-            <span class="font-scale__a font-scale__a--small">A</span>
-            <input
-              class="font-scale__slider"
-              type="range"
-              min="0.85"
-              max="1.35"
-              step="0.05"
-              :value="app.fontScale"
-              aria-label="界面字体大小"
-              @input="previewFontScale"
-              @change="saveFontScale"
-            />
-            <span class="font-scale__a font-scale__a--large">A</span>
-            <span class="font-scale__value">{{ Math.round(app.fontScale * 100) }}%</span>
+          <div class="settings-row settings-row--scale">
+            <span class="settings-label">字体大小</span>
+            <div class="font-scale">
+              <span class="font-scale__a font-scale__a--small">A</span>
+              <input
+                class="font-scale__slider"
+                type="range"
+                min="0.85"
+                max="1.35"
+                step="0.05"
+                :value="app.fontScale"
+                aria-label="界面字体大小"
+                @input="previewFontScale"
+                @change="saveFontScale"
+              />
+              <span class="font-scale__a font-scale__a--large">A</span>
+              <span class="font-scale__value">{{ Math.round(app.fontScale * 100) }}%</span>
+            </div>
+          </div>
+
+          <div class="settings-row settings-row--theme">
+            <span class="settings-label">主题色</span>
+            <div class="theme-options">
+              <button
+                v-for="t in THEME_OPTIONS"
+                :key="t.id"
+                class="theme-option"
+                :class="{ 'theme-option--on': app.theme === t.id }"
+                @click="setAppTheme(t.id)"
+              >
+                {{ t.label }}
+              </button>
+            </div>
           </div>
         </div>
 
-        <div class="settings-row settings-row--theme">
-          <span class="settings-label">主题色</span>
-          <div class="theme-options">
-            <button
-              v-for="t in THEME_OPTIONS"
-              :key="t.id"
-              class="theme-option"
-              :class="{ 'theme-option--on': app.theme === t.id }"
-              @click="setAppTheme(t.id)"
-            >{{ t.label }}</button>
+        <!-- 功能入口：影视是可选模块，默认不占底栏，需要时再打开。 -->
+        <div class="settings-group">
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="app.showTvTab"
+            @click="appSettings.update({ showTvTab: !app.showTvTab })"
+          >
+            <span class="settings-label">显示影视入口</span>
+            <span class="toggle" :class="{ on: app.showTvTab }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+        </div>
+        <p class="settings-hint">
+          开启后底部导航显示「影视」。关闭只会隐藏入口，已添加的视频源和观看记录都会保留，仍可从「我 →
+          视频源管理」进入。
+        </p>
+
+        <!-- 网络书源：默认关闭，首次开启时说明会联网 -->
+        <div class="settings-group">
+          <button
+            class="settings-row settings-row--toggle"
+            role="switch"
+            :aria-checked="sourceStore.networkEnabled"
+            @click="toggleNetworkSources"
+          >
+            <span class="settings-label">网络书源</span>
+            <span class="toggle" :class="{ on: sourceStore.networkEnabled }" aria-hidden="true">
+              <span class="toggle__dot" />
+            </span>
+          </button>
+        </div>
+
+        <!-- Library -->
+        <div class="settings-group">
+          <button class="settings-cell" @click="pickAndImport()">
+            <span class="settings-cell-label">导入本地书籍</span>
+            <span class="settings-cell-value">{{ bookStore.books.length }} 本</span>
+          </button>
+          <button class="settings-cell" :disabled="backupBusy" @click="backupToFile">
+            <span class="settings-cell-label">备份到文件</span>
+            <span class="settings-cell-value">
+              {{
+                backupSaving
+                  ? '写入中'
+                  : backupProgress.phase === 'export'
+                    ? `${backupProgress.current}/${backupProgress.total}`
+                    : 'zip'
+              }}
+            </span>
+          </button>
+          <button class="settings-cell" :disabled="backupBusy" @click="pickRestoreFile">
+            <span class="settings-cell-label">从备份恢复</span>
+            <span class="settings-cell-value">覆盖当前数据</span>
+          </button>
+          <button class="settings-cell" @click="clearCache">
+            <span class="settings-cell-label">清理缓存</span>
+          </button>
+        </div>
+
+        <!-- 备份/恢复是长任务：转圈之外要有可数的进度。 -->
+        <div v-if="backupProgress.busy" class="settings-progress" role="status">
+          <div class="settings-progress__track">
+            <div class="settings-progress__bar" :style="{ width: backupPercent + '%' }" />
+          </div>
+          <div class="settings-progress__text">
+            <span>{{ backupProgress.message }}</span>
+            <span>{{ backupPercent }}%</span>
           </div>
         </div>
-      </div>
 
-      <!-- 功能入口：影视是可选模块，默认不占底栏，需要时再打开。 -->
-      <div class="settings-group">
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="app.showTvTab"
-          @click="appSettings.update({ showTvTab: !app.showTvTab })"
-        >
-          <span class="settings-label">显示影视入口</span>
-          <span class="toggle" :class="{ on: app.showTvTab }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-      </div>
-      <p class="settings-hint">
-        开启后底部导航显示「影视」。关闭只会隐藏入口，已添加的视频源和观看记录都会保留，仍可从「我 → 视频源管理」进入。
-      </p>
-
-      <!-- 网络书源：默认关闭，首次开启时说明会联网 -->
-      <div class="settings-group">
-        <button
-          class="settings-row settings-row--toggle"
-          role="switch"
-          :aria-checked="sourceStore.networkEnabled"
-          @click="toggleNetworkSources"
-        >
-          <span class="settings-label">网络书源</span>
-          <span class="toggle" :class="{ on: sourceStore.networkEnabled }" aria-hidden="true">
-            <span class="toggle__dot" />
-          </span>
-        </button>
-      </div>
-
-      <!-- Library -->
-      <div class="settings-group">
-        <button class="settings-cell" @click="pickAndImport()">
-          <span class="settings-cell-label">导入本地书籍</span>
-          <span class="settings-cell-value">{{ bookStore.books.length }} 本</span>
-          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
-        </button>
-        <button class="settings-cell" :disabled="backupBusy" @click="backupToFile">
-          <span class="settings-cell-label">备份到文件</span>
-          <span class="settings-cell-value">
-            {{ backupSaving ? '写入中' : backupProgress.phase === 'export' ? `${backupProgress.current}/${backupProgress.total}` : 'zip' }}
-          </span>
-          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
-        </button>
-        <button class="settings-cell" :disabled="backupBusy" @click="pickRestoreFile">
-          <span class="settings-cell-label">从备份恢复</span>
-          <span class="settings-cell-value">覆盖当前数据</span>
-          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
-        </button>
-        <button class="settings-cell" @click="clearCache">
-          <span class="settings-cell-label">清理缓存</span>
-          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
-        </button>
-      </div>
-
-      <!-- 备份/恢复是长任务：转圈之外要有可数的进度。 -->
-      <div v-if="backupProgress.busy" class="settings-progress" role="status">
-        <div class="settings-progress__track">
-          <div class="settings-progress__bar" :style="{ width: backupPercent + '%' }" />
+        <!-- About -->
+        <div class="settings-group">
+          <button class="settings-cell" @click="about">
+            <span class="settings-cell-label">关于微读</span>
+            <span class="settings-cell-value">v{{ appVersion }}</span>
+          </button>
         </div>
-        <div class="settings-progress__text">
-          <span>{{ backupProgress.message }}</span>
-          <span>{{ backupPercent }}%</span>
-        </div>
-      </div>
-
-      <!-- About -->
-      <div class="settings-group">
-        <button class="settings-cell" @click="about">
-          <span class="settings-cell-label">关于微读</span>
-          <span class="settings-cell-value">v{{ appVersion }}</span>
-          <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
-        </button>
-      </div>
-
       </template>
     </div>
   </div>
@@ -452,7 +456,7 @@ function about() {
   display: flex;
   gap: 4px;
   margin: 0 16px 10px;
-  padding: 3px;
+  padding: 5px;
   border-radius: 11px;
   /* --bg-secondary is within 3 levels of the page canvas in both themes, so the
      track (and therefore the white pill inside it) disappeared. */
@@ -462,11 +466,13 @@ function about() {
 
 .settings-tab {
   flex: 1;
-  min-height: 44px;
+  min-height: 36px;
   border-radius: 8px;
   font-size: calc(14px * var(--app-font-scale));
   color: var(--text-secondary);
-  transition: background-color 140ms ease-out, color 140ms ease-out;
+  transition:
+    background-color 140ms ease-out,
+    color 140ms ease-out;
 }
 
 .settings-tab--on {
@@ -727,5 +733,4 @@ function about() {
   background: var(--accent-soft);
   color: var(--accent-on-soft);
 }
-
 </style>

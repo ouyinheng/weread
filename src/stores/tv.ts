@@ -122,6 +122,13 @@ export const useTvStore = defineStore('tv', () => {
     return history.value.find(h => h.sourceId === sourceId && h.vodId === vodId)
   }
 
+  /** 删掉指定的几条观看记录（多选删除用）。 */
+  function removeHistory(keys: string[]): void {
+    if (!keys.length) return
+    const drop = new Set(keys)
+    history.value = history.value.filter(h => !drop.has(h.key))
+  }
+
   function clearHistory(): void {
     history.value = []
     persist()
@@ -140,6 +147,7 @@ export const useTvStore = defineStore('tv', () => {
     importSources,
     recordHistory,
     historyOf,
+    removeHistory,
     clearHistory,
   }
 })

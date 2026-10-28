@@ -14,18 +14,19 @@
    *
    * One accent value serves both roles — text/icon colour on a light surface
    * and the fill under white text — so it has to clear 4.5:1 against white in
-   * *both* directions. #1B88EE did neither (3.62:1 as text, 3.62:1 under white
-   * labels); #0E6FC7 sits at 5.10:1 either way.
+   * *both* directions. #3E6BF0 measures 4.60:1 either way, just over the AA
+   * floor; on the grey page canvas (#F4F5F7) it drops to 4.22:1, so accent
+   * text belongs on white cards/panels rather than directly on the canvas.
    *
    * `--on-accent` is what text on an accent fill uses. In the dark theme the
-   * accent is lifted for contrast, which makes white text on it impossible
-   * (2.68:1) — so dark mode switches the label to near-black instead of white.
+   * accent is lifted for contrast, which makes white text on it impossible —
+   * so dark mode switches the label to near-black instead of white.
    */
-  --accent: #0e6fc7;
-  --accent-press: #0b5ca8;
+  --accent: #3e6bf0;
+  --accent-press: #2f57d4;
   --on-accent: #ffffff;
-  --accent-soft: rgba(14, 111, 199, 0.10);
-  --accent-soft-strong: rgba(14, 111, 199, 0.18);
+  --accent-soft: rgba(62, 107, 240, 0.10);
+  --accent-soft-strong: rgba(62, 107, 240, 0.18);
 
   /* Surfaces */
   --bg: #FFFFFF;
@@ -57,10 +58,10 @@
   --text-placeholder: #5f5f5f;
   /*
    * Text drawn on an accent-tinted surface (`--accent-soft`) loses about a stop
-   * of contrast against the tint; this darker step buys it back (5.0:1 on a 10%
-   * tint, 6.3:1 on white).
+   * of contrast against the tint; this darker step buys it back (6.35:1 on a
+   * 10% tint, 5.69:1 on the 18% one).
    */
-  --accent-on-soft: #0a5aa5;
+  --accent-on-soft: #2649cc;
   /*
    * Page titles (书架 / 设置). Measured off the reference screenshot at
    * rgb(107,107,118) — darker than a secondary label, lighter than body copy.
@@ -75,8 +76,8 @@
    */
   --stat-reading: #1f8a4d;
   --stat-reading-soft: #e6f3eb;
-  --stat-finished: #0e6fc7;
-  --stat-finished-soft: #e4eef9;
+  --stat-finished: #3e6bf0;
+  --stat-finished-soft: #ecf0fe;
   --stat-note: #6b4bc4;
   --stat-note-soft: #ece7f9;
   --stat-bookmark: #a8641a;
@@ -190,13 +191,15 @@
   --bottom-bar-bg: #1F1F1F;
   --tabbar-inactive: #9a9a9a;
   --surface-fade: rgba(26, 26, 26, 0.94);
-  /* Brand blue at full saturation is too dark on #1A1A1A; lift it. White label
-     text on the lifted blue would be 2.68:1, so fills flip to dark labels. */
-  --accent: #4AA3F5;
-  --accent-press: #3b93e6;
+  /* 深色下把品牌蓝提亮：#3E6BF0 落在 #1A1A1A 上太暗（3.0:1），提亮到
+     #7D9BFF 后是 7.3:1；白字压在它上面只有 2.6:1，所以填充上的文字改用近黑。 */
+  --accent: #7d9bff;
+  --accent-press: #6b8af0;
   --on-accent: #101010;
-  --accent-soft: rgba(74, 163, 245, 0.16);
-  --accent-soft-strong: rgba(74, 163, 245, 0.26);
+  --accent-soft: rgba(125, 155, 255, 0.16);
+  --accent-soft-strong: rgba(125, 155, 255, 0.26);
+  /* 深色下「软底上的文字」要用浅色，否则 #2649CC 在暗底上几乎看不见。 */
+  --accent-on-soft: #a8beff;
 }
 
 * {

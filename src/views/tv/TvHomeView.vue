@@ -2,10 +2,9 @@
 /**
  * 影视首页（tab）。
  *
- * 布局对齐长视频 App 的信息层级：搜索入口在最上，接着「继续观看」和频道
- * chips；「全部」是按分区横滑的片库（刚刚上架 / 电影 / 电视剧…），点具体
- * 频道进海报墙。列表数据走页面级缓存：返回本页或来回切 tab 都不重新打
- * 接口，过期才静默换新，避免一回来就转圈。
+ * 布局对齐长视频 App 的信息层级：搜索入口在最上，接着频道 chips 和海报墙。
+ * 列表数据缓存 24 小时（内存 + localStorage，跨启动也有效）：返回本页或在
+ * tab 之间来回切都不重新打接口；想立刻看新的就下拉刷新。
  */
 import { computed, onActivated, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -13,7 +12,7 @@ import Icon from '@/components/Icon.vue'
 import { useTvStore } from '@/stores/tv'
 import { peekLatest, saveLatest } from '@/utils/tv/cache'
 import { latestFrom } from '@/utils/tv/cms'
-import type { TvHistoryEntry, TvItem } from '@/utils/tv/types'
+import type { TvItem } from '@/utils/tv/types'
 
 // 组件名对上 App.vue 的 keep-alive include，tab 页面才不会一返回就整页重建。
 defineOptions({ name: 'tv' })
@@ -25,6 +24,62 @@ const items = ref<TvItem[]>([])
 const loading = ref(false)
 const error = ref('')
 const activeCat = ref('全部')
+/** 缓存时间戳，用来在标题行显示「更新于 …」。 */
+const updatedAt = ref(0)
+
+/* ---------- 下拉刷新 ---------- */
+const PULL_TRIGGER = 56
+const PULL_MAX = 72
+const pull = ref(0)
+const refreshing = ref(false)
+let pullStartY = 0
+const dragging = ref(false)
+
+function onTouchStart(e: TouchEvent): void {
+  if (refreshing.value) return
+  const el = e.currentTarget as HTMLElement
+  // 只有在顶部才接管，否则会和正常滚动打架
+  if (el.scrollTop > 0) return
+  pullStartY = e.touches[0].clientY
+  dragging.value = true
+}
+
+function onTouchMove(e: TouchEvent): void {
+  if (!dragging.value || refreshing.value) return
+  const dy = e.touches[0].clientY - pullStartY
+  if (dy <= 0) {
+    pull.value = 0
+    return
+  }
+  // 阻尼：手指走 2px，指示器走 1px，阻尼感接近原生
+  pull.value = Math.min(PULL_MAX, dy * 0.5)
+  if (pull.value > 4) e.preventDefault()
+}
+
+async function onTouchEnd(): Promise<void> {
+  if (!dragging.value) return
+  dragging.value = false
+  if (pull.value < PULL_TRIGGER) {
+    pull.value = 0
+    return
+  }
+  pull.value = PULL_TRIGGER
+  refreshing.value = true
+  // silent：旧内容留着，只让指示器转，不闪一层骨架
+  await reload({ silent: items.value.length > 0 })
+  refreshing.value = false
+  pull.value = 0
+}
+
+/** 缓存时间 → 「12:04 更新」/「昨天 22:10 更新」。 */
+const updatedText = computed(() => {
+  if (!updatedAt.value) return ''
+  const d = new Date(updatedAt.value)
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const today = new Date()
+  const sameDay = d.toDateString() === today.toDateString()
+  return sameDay ? `${hm} 更新` : `${d.getMonth() + 1}/${d.getDate()} ${hm} 更新`
+})
 
 const CATEGORY_ORDER = ['电影', '电视剧', '综艺', '动漫', '纪录片']
 
@@ -39,32 +94,21 @@ function categoryOf(item: TvItem): string {
   return '其他'
 }
 
-interface Rail {
-  key: string
-  title: string
-  items: TvItem[]
-}
-
-const recent = computed(() => store.history.slice(0, 12))
 const hasSources = computed(() => store.sources.length > 0)
 
-/** 「全部」下的分区：最新一批在前，然后按频道各一条横滑带。 */
-const rails = computed<Rail[]>(() => {
-  const out: Rail[] = []
-  const fresh = items.value.slice(0, 12)
-  if (fresh.length) out.push({ key: 'new', title: '刚刚上架', items: fresh })
-  for (const cat of CATEGORY_ORDER) {
-    const list = items.value.filter(i => categoryOf(i) === cat)
-    if (list.length >= 4) out.push({ key: cat, title: cat, items: list })
-  }
-  return out
-})
+/** 频道：只在片库里真有内容的频道才出 chip，点了空频道不会有空墙。 */
+const cats = computed(() => CATEGORY_ORDER.filter(cat => items.value.some(i => categoryOf(i) === cat)))
 
-const chips = computed(() => ['全部', ...rails.value.filter(r => r.key !== 'new').map(r => r.title)])
+const chips = computed(() => ['全部', ...cats.value])
 
-/** 点了具体频道就进海报墙。 */
+/**
+ * 每个频道（含「全部」）都用同一套海报墙。
+ *
+ * 之前「全部」是多条横滑带（刚刚上架 + 每个频道一条），其它频道是网格，
+ * 点一下 chip 版式就换一种，读起来像两个页面。现在统一成网格。
+ */
 const activeGrid = computed(() =>
-  activeCat.value === '全部' ? [] : items.value.filter(i => categoryOf(i) === activeCat.value),
+  activeCat.value === '全部' ? items.value : items.value.filter(i => categoryOf(i) === activeCat.value),
 )
 
 onMounted(sync)
@@ -87,6 +131,7 @@ async function sync() {
   const cached = peekLatest()
   if (cached) {
     items.value = cached.items
+    updatedAt.value = cached.at
     if (cached.fresh) return
   }
   void reload({ silent: items.value.length > 0 })
@@ -114,10 +159,11 @@ async function reload(opts: { silent?: boolean } = {}) {
   if (merged.length) {
     items.value = merged
     saveLatest(merged)
+    updatedAt.value = Date.now()
     // 静默换新后选中的频道可能没了，退回「全部」，不留空海报墙。
     if (activeCat.value !== '全部' && !chips.value.includes(activeCat.value)) activeCat.value = '全部'
   } else if (!items.value.length) {
-    error.value = '最近更新暂时拉不到，进「管理」测一下源'
+    error.value = '最近更新暂时拉不到，去「我 → 视频源管理」测一下源'
   }
   loading.value = false
 }
@@ -134,23 +180,6 @@ function openItem(item: TvItem) {
   router.push({ name: 'tvDetail', query: { source: item.sourceId, id: item.id } })
 }
 
-function resume(h: TvHistoryEntry) {
-  router.push({
-    name: 'tvPlay',
-    query: { source: h.sourceId, id: h.vodId, g: String(h.groupIndex), e: String(h.episodeIndex) },
-  })
-}
-
-function percentOf(h: TvHistoryEntry): number {
-  if (!h.duration) return 0
-  return Math.min(100, Math.max(2, Math.round((h.position / h.duration) * 100)))
-}
-
-function episodeLabel(h: TvHistoryEntry): string {
-  const pct = percentOf(h)
-  return pct > 2 ? `看到 ${h.episodeName} · ${pct}%` : h.episodeName
-}
-
 function metaOf(item: TvItem): string {
   return [item.year, item.area].filter(Boolean).join(' · ') || item.typeName || ''
 }
@@ -163,16 +192,31 @@ function metaOf(item: TvItem): string {
         <Icon name="search" :size="17" />
         <span class="tv__search-text">搜电影、剧集、综艺</span>
       </button>
-      <!-- Same order as the shelf: search pill first, then the title row.
-           The title element was here but empty, which is why this tab started
-           90px higher than 书架 and had no way into 视频源管理. -->
-      <div class="tv__head">
-        <h1 class="tv__title">影视</h1>
-        <button class="tv__manage" @click="goSources">管理视频源</button>
-      </div>
     </header>
 
-    <main class="tv__body">
+    <main
+      class="tv__body"
+      @touchstart="onTouchStart"
+      @touchmove="onTouchMove"
+      @touchend="onTouchEnd"
+      @touchcancel="onTouchEnd"
+    >
+      <!-- 下拉刷新指示器：高度跟着手指走，松手过阈值才真刷新 -->
+      <div
+        class="tv__pull"
+        :style="{
+          height: (refreshing ? PULL_TRIGGER : pull) + 'px',
+          transition: dragging ? 'none' : '',
+        }"
+        :class="{ 'tv__pull--ready': pull >= PULL_TRIGGER && !refreshing }"
+        aria-hidden="true"
+      >
+        <span class="tv__pull-spin" :class="{ 'tv__pull-spin--on': refreshing }" />
+        <span class="tv__pull-text">
+          {{ refreshing ? '正在刷新…' : pull >= PULL_TRIGGER ? '松开刷新' : '下拉刷新' }}
+        </span>
+      </div>
+
       <div v-if="!hasSources" class="tv__empty">
         <div class="tv__empty-icon">
           <Icon name="media" :size="48" :width="0.95" />
@@ -183,29 +227,6 @@ function metaOf(item: TvItem): string {
       </div>
 
       <template v-else>
-        <section v-if="recent.length" class="tv__section">
-          <div class="tv__section-head">
-            <h2 class="tv__section-title">继续观看</h2>
-            <button class="tv__section-more" @click="goSearch">去找片</button>
-          </div>
-          <div class="tv__rail">
-            <button v-for="h in recent" :key="h.key" class="tv-continue" @click="resume(h)">
-              <div class="tv-continue__pic">
-                <img v-if="h.pic" :src="h.pic" alt="" loading="lazy" referrerpolicy="no-referrer" />
-                <span v-else class="tv-continue__ph">{{ h.name.slice(0, 2) }}</span>
-                <span class="tv-continue__play">
-                  <Icon name="play" :size="15" :width="2" />
-                </span>
-                <span class="tv-continue__bar">
-                  <span class="tv-continue__bar-fill" :style="{ width: percentOf(h) + '%' }" />
-                </span>
-              </div>
-              <span class="tv-continue__name">{{ h.name }}</span>
-              <span class="tv-continue__sub">{{ episodeLabel(h) }}</span>
-            </button>
-          </div>
-        </section>
-
         <div v-if="chips.length > 1" class="tv__chips">
           <button
             v-for="c in chips"
@@ -218,35 +239,12 @@ function metaOf(item: TvItem): string {
           </button>
         </div>
 
-        <template v-if="activeCat === '全部'">
-          <section v-for="rail in rails" :key="rail.key" class="tv__section">
-            <div class="tv__section-head">
-              <h2 class="tv__section-title">{{ rail.title }}</h2>
-              <span v-if="rail.key !== 'new'" class="tv__section-from">{{ rail.items.length }} 部</span>
-            </div>
-            <div class="tv__rail">
-              <button
-                v-for="item in rail.items"
-                :key="item.id + item.sourceId"
-                class="tv-poster"
-                @click="openItem(item)"
-              >
-                <div class="tv-poster__pic">
-                  <img v-if="item.pic" :src="item.pic" alt="" loading="lazy" referrerpolicy="no-referrer" />
-                  <span v-else class="tv-poster__ph">{{ item.name.slice(0, 2) }}</span>
-                  <span v-if="item.remarks" class="tv-poster__badge">{{ item.remarks }}</span>
-                </div>
-                <span class="tv-poster__name">{{ item.name }}</span>
-                <span class="tv-poster__meta">{{ metaOf(item) }}</span>
-              </button>
-            </div>
-          </section>
-        </template>
-
-        <section v-else class="tv__section">
+        <section class="tv__section">
           <div class="tv__section-head">
             <h2 class="tv__section-title">{{ activeCat }}</h2>
-            <span class="tv__section-from">{{ activeGrid.length }} 部</span>
+            <span class="tv__section-from">
+              {{ activeGrid.length }} 部<template v-if="updatedText"> · {{ updatedText }}</template>
+            </span>
           </div>
           <div class="tv__grid">
             <button
@@ -271,14 +269,6 @@ function metaOf(item: TvItem): string {
         </div>
 
         <p v-else-if="error" class="tv__rail-error" @click="reload()">{{ error }}，点此重试</p>
-
-        <section class="tv__source-row">
-          <span class="tv__source-dot" />
-          <span class="tv__source-text">
-            {{ store.enabledSources.length }} / {{ store.sources.length }} 个源已启用
-          </span>
-          <button class="tv__source-link" @click="goSources">源管理</button>
-        </section>
       </template>
     </main>
   </div>
@@ -308,21 +298,6 @@ function metaOf(item: TvItem): string {
   font-weight: 600;
   color: var(--text-title);
 }
-.tv__manage {
-  display: flex;
-  align-items: center;
-  height: 44px;
-  border: 0;
-  padding: 0 2px 0 8px;
-  background: transparent;
-  color: var(--text);
-  font-size: calc(15px * var(--app-font-scale));
-  font-family: inherit;
-}
-.tv__manage:active {
-  opacity: 0.6;
-}
-
 .tv__search {
   display: flex;
   align-items: center;
@@ -350,7 +325,49 @@ function metaOf(item: TvItem): string {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* 下拉手势自己处理，别让 WebView 再加一层回弹 */
+  overscroll-behavior-y: contain;
+  /* 列表页不该横向滚动；万一某个子元素算宽了，裁掉而不是整页跟着滑 */
+  overflow-x: hidden;
+  /* 列表页不该横向滚动；万一某个子元素算宽了，裁掉而不是整页跟着滑 */
+  overflow-x: hidden;
   padding: 4px 0 calc(20px + var(--safe-bottom));
+}
+
+.tv__pull {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: calc(12px * var(--app-font-scale));
+  transition: height 160ms var(--ease-standard);
+}
+
+.tv__pull--ready {
+  color: var(--accent);
+}
+
+.tv__pull-spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.6px solid var(--divider);
+  border-top-color: var(--accent);
+  /* 静止时停在 0 度，刷新时转起来 */
+}
+
+.tv__pull-spin--on {
+  animation: tv-spin 700ms linear infinite;
+}
+
+@keyframes tv-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv__pull-spin--on { animation-duration: 2s; }
 }
 
 .tv__empty {
@@ -458,92 +475,18 @@ function metaOf(item: TvItem): string {
   display: none;
 }
 
+/*
+ * 列数跟屏幕走：窄屏 3 列，平板/横屏自动加列，不再死写 3 列。
+ * 另外 grid item 默认 min-width:auto，会被标题的 min-content 撑大
+ * （标题是 nowrap + ellipsis，但 min-content 仍是整行文字），一撑就把
+ * 整个网格顶出屏幕——这就是之前能左右滑的原因。下面那条 min-width:0 是
+ * 关键，不能删。
+ */
 .tv__grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
   gap: 14px 10px;
   padding: 0 16px 4px;
-}
-
-.tv-continue {
-  flex: 0 0 auto;
-  width: 128px;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  text-align: left;
-  font-family: inherit;
-}
-.tv-continue:active {
-  opacity: 0.75;
-}
-.tv-continue__pic {
-  position: relative;
-  width: 128px;
-  height: 76px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--bg-secondary);
-}
-.tv-continue__pic img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.tv-continue__ph {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  font-size: 18px;
-  color: var(--text-secondary);
-}
-.tv-continue__play {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.5);
-  color: #fff;
-  backdrop-filter: blur(2px);
-}
-.tv-continue__bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.25);
-}
-.tv-continue__bar-fill {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-}
-.tv-continue__name {
-  display: block;
-  margin-top: 7px;
-  font-size: 13px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tv-continue__sub {
-  display: block;
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tv-poster {
@@ -557,6 +500,7 @@ function metaOf(item: TvItem): string {
 }
 .tv__grid .tv-poster {
   width: 100%;
+  min-width: 0;
 }
 .tv-poster:active {
   opacity: 0.75;
@@ -661,12 +605,5 @@ function metaOf(item: TvItem): string {
   min-width: 0;
   font-size: 12px;
   color: var(--text-secondary);
-}
-.tv__source-link {
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 13px;
-  font-family: inherit;
 }
 </style>

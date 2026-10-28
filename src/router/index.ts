@@ -5,7 +5,7 @@ import { isTabRoute, tabIndex } from './tabs'
 export function routeDepth(name: unknown): number {
   const n = String(name || '')
   if (n === 'reader' || n === 'sourceDetail' || n === 'tvDetail' || n === 'tvPlay') return 3
-  if (n === 'catalog' || n === 'settings' || n === 'sourceList' || n === 'search' || n === 'tvSearch' || n === 'tvSources') return 2
+  if (n === 'catalog' || n === 'settings' || n === 'sourceList' || n === 'search' || n === 'tvSearch' || n === 'tvSources' || n === 'tvHistory') return 2
   if (n === 'fontSettings') return 3
   return 1
 }
@@ -18,6 +18,7 @@ const routes = [
   { path: '/tv/detail', name: 'tvDetail', component: () => import('@/views/tv/TvDetailView.vue') },
   { path: '/tv/play', name: 'tvPlay', component: () => import('@/views/tv/TvPlayerView.vue') },
   { path: '/tv/sources', name: 'tvSources', component: () => import('@/views/tv/TvSourcesView.vue') },
+  { path: '/tv/history', name: 'tvHistory', component: () => import('@/views/tv/TvHistoryView.vue') },
   { path: '/search', name: 'search', component: () => import('@/views/SearchView.vue') },
   // 发现页暂时下线，旧链接统一落到搜索页。
   { path: '/discover', redirect: '/search' },

@@ -144,6 +144,11 @@ withDefaults(
     <template v-else-if="name === 'message'">
       <path d="M20.4 11.6c0 4-3.8 7.2-8.4 7.2-1 0-2-.2-2.9-.5l-4.5 1.3 1.3-3.9a6.6 6.6 0 01-1.3-4.1c0-4 3.8-7.2 8.4-7.2s7.4 3.2 7.4 7.2z" />
     </template>
+    <!-- 收藏（影视播放页）：心形，和参考图的操作行一致 -->
+    <path
+      v-else-if="name === 'heart'"
+      d="M12 20.4l-1.3-1.2C5.5 14.5 3 12.1 3 9.1 3 6.6 5 4.6 7.5 4.6c1.5 0 2.9.7 3.7 1.9.8-1.2 2.2-1.9 3.7-1.9C17.4 4.6 19.4 6.6 19.4 9.1c0 3-2.5 5.4-7.7 10.1L12 20.4z"
+    />
     <!-- 首行顶格 / 首行缩进 cards in the indent sheet -->
     <template v-else-if="name === 'align-left'">
       <path d="M4 6.5h16M4 11h11M4 15.5h16M4 20h11" />
@@ -168,6 +173,11 @@ withDefaults(
     <template v-else-if="name === 'lock'">
       <rect x="5" y="10.6" width="14" height="9.4" rx="2.2" />
       <path d="M8.2 10.6V7.8a3.8 3.8 0 017.6 0v2.8" />
+    </template>
+    <!-- 开锁（播放页锁屏按钮的待锁状态）：锁梁开口朝右 -->
+    <template v-else-if="name === 'unlock'">
+      <rect x="5" y="10.6" width="14" height="9.4" rx="2.2" />
+      <path d="M8.2 10.6V7.8a3.8 3.8 0 017.2-1.2" />
     </template>
     <!-- 定时关闭: clock -->
     <template v-else-if="name === 'timer'">

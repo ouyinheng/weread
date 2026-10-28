@@ -12,6 +12,7 @@ import Icon from '@/components/Icon.vue'
 import { useTvStore } from '@/stores/tv'
 import { peekLatest, saveLatest } from '@/utils/tv/cache'
 import { latestFrom } from '@/utils/tv/cms'
+import { pickLocalVideos } from '@/utils/tv/local'
 import type { TvItem } from '@/utils/tv/types'
 
 // 组件名对上 App.vue 的 keep-alive include，tab 页面才不会一返回就整页重建。
@@ -176,6 +177,18 @@ function goSources() {
   router.push({ name: 'tvSources' })
 }
 
+/**
+ * 看本地视频：直接弹系统文件选择器，选完就进播放页。
+ *
+ * 不做「本地片库」那一层：文件没法持久（blob URL 刷新即失效），再摆一排
+ * 「上次选过的」只会点开是黑的。选完就看，返回后想换片再点一次。
+ */
+function openLocal() {
+  pickLocalVideos(() => {
+    router.push({ name: 'tvPlay', query: { local: '1' } })
+  })
+}
+
 function openItem(item: TvItem) {
   router.push({ name: 'tvDetail', query: { source: item.sourceId, id: item.id } })
 }
@@ -191,6 +204,25 @@ function metaOf(item: TvItem): string {
       <button class="tv__search" @click="goSearch">
         <Icon name="search" :size="17" />
         <span class="tv__search-text">搜电影、剧集、综艺</span>
+      </button>
+      <!--
+        本地视频入口：顶栏右端一颗图标按钮，搜索框让出 44px 的宽度，
+        其余元素的位置和层级都不动。
+      -->
+      <button class="tv__local" aria-label="播放本地视频" @click="openLocal">
+        <svg
+          width="21"
+          height="21"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M3 7.4a2 2 0 012-2h3.6l1.9 2.2H19a2 2 0 012 2v7a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+          <path d="M10.1 12.2l3.6 2.2-3.6 2.2z" fill="currentColor" stroke="none" />
+        </svg>
       </button>
     </header>
 
@@ -224,6 +256,8 @@ function metaOf(item: TvItem): string {
         <p class="tv__empty-title">还没有视频源</p>
         <p class="tv__empty-desc">添加苹果 CMS 接口地址后即可搜索播放</p>
         <button class="tv__empty-btn" @click="goSources">添加视频源</button>
+        <!-- 没有源也能看片子：本地文件不需要任何接口。 -->
+        <button class="tv__empty-link" @click="openLocal">或播放本地视频</button>
       </div>
 
       <template v-else>
@@ -280,6 +314,9 @@ function metaOf(item: TvItem): string {
 }
 
 .tv__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: calc(10px + var(--safe-top)) 16px 6px;
 }
 .tv__head {
@@ -302,7 +339,9 @@ function metaOf(item: TvItem): string {
   display: flex;
   align-items: center;
   gap: 7px;
-  width: 100%;
+  /* 顶栏是 flex：搜索框吃掉剩余宽度，「本地视频」按钮固定 44px。 */
+  flex: 1;
+  min-width: 0;
   height: 44px;
   padding: 0 12px;
   border: 0;
@@ -318,6 +357,25 @@ function metaOf(item: TvItem): string {
 }
 .tv__search-text {
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 本地视频：和搜索框同高的圆角方块，视觉上是同一个搜索条的邻居。 */
+.tv__local {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--bg);
+  color: var(--text-secondary);
+}
+.tv__local:active {
+  opacity: 0.75;
 }
 
 .tv__body {
@@ -406,6 +464,20 @@ function metaOf(item: TvItem): string {
 }
 .tv__empty-btn:active {
   background: var(--accent-press);
+}
+/* 次要入口：本地视频不需要视频源，给一颗低权重的文字按钮。 */
+.tv__empty-link {
+  margin-top: 14px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-family: inherit;
+}
+.tv__empty-link:active {
+  opacity: 0.6;
 }
 
 .tv__section {

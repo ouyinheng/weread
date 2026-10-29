@@ -11,8 +11,10 @@
  *  4. 书架上常驻迷你控件；点它回到那本书的听书页
  *  5. 「更多 → 退出听书」后控件消失、引擎静音
  *
- * 浏览器没有语音引擎，所以这里换上一个 40ms 就 `onend` 的假 `speechSynthesis`：
- * 播放器循环照真跑，"还在念吗" 就变成一个可数的数字。
+ * 浏览器没有语音引擎，所以这里换上一个 200ms 就 `onend` 的假 `speechSynthesis`：
+ * 播放器循环照真跑，"还在念吗" 就变成一个可数的数字。200ms 是给
+ * 「一段话一次合成」留的余量——一次念得越少，整本书越快念完，
+ * 而这个测试要观察的是「离开阅读页之后还在念」，书不能提前念完。
  *
  * 需要静态服务（dist/）在 127.0.0.1:5173。
  */
@@ -78,7 +80,7 @@ try {
       getVoices: () => [{ name: 'Fake', lang: 'zh-CN', localService: true }],
       speak: (u) => {
         window.__spoken++
-        const t = setTimeout(() => { timers.delete(t); if (u.onend) u.onend() }, 40)
+        const t = setTimeout(() => { timers.delete(t); if (u.onend) u.onend() }, 200)
         timers.add(t)
       },
       cancel: () => { for (const t of timers) clearTimeout(t); timers.clear() },

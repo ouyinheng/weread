@@ -29,7 +29,7 @@ import { useListenPlayer } from './player'
 import { segmentText, toCharOffset, type Sentence } from './segmenter'
 import { chapterPlainText } from '@/utils/chapter-text'
 import { nowPlayingStart, nowPlayingStop, nowPlayingUpdate, onNowPlayingAction } from './now-playing'
-import { dbGetAll } from '@/utils/db'
+import { dbGetAllByIndex } from '@/utils/db'
 import { ensureChapterText } from '@/utils/source/sourceService'
 import { useBookStore, useSettingsStore } from '@/stores'
 import { countChars, progressPercent } from '@/utils/progress'
@@ -123,7 +123,12 @@ function createListenSession() {
   async function loadMetas(book: Book): Promise<void> {
     let rows: any[] = []
     try {
-      rows = await dbGetAll<any>('chapters')
+      /*
+       * Per-book index, not the whole store: reading every chapter of every
+       * book on the shelf is megabytes of HTML through the storage bridge, and
+       * that alone delayed the first spoken word on a big library.
+       */
+      rows = await dbGetAllByIndex<any>('chapters', 'bookId', book.id)
     } catch {
       rows = []
     }
@@ -282,6 +287,13 @@ function createListenSession() {
     // Switching books is a new session: stop the old one first so its progress
     // is flushed against its own book record.
     if (bookId.value && bookId.value !== book.id) await stop()
+
+    /*
+     * Boot the speech engine now, not when the first sentence is due: its cold
+     * start (voice data, audio pipeline) then overlaps with reading the chapter
+     * out of the database instead of being heard as a second of dead air.
+     */
+    player.prewarm()
 
     currentBook = book
     bookId.value = book.id

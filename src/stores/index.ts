@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import type { Book, ReaderSettings, Chapter, Bookmark, AppSettings } from '@/types'
 import { fontStackOf } from '@/utils/fonts'
 import { systemFontScale } from '@/utils/native'
-import { dbGetAll, dbPut, dbDelete, dbGet, dbDeleteByIndex } from '@/utils/db'
+import { dbGetAll, dbGetAllByIndex, dbPut, dbDelete, dbGet, dbDeleteByIndex } from '@/utils/db'
 
 export const useBookStore = defineStore('book', () => {
   const books = ref<Book[]>([])
@@ -163,9 +163,14 @@ export const useChapterStore = defineStore('chapter', () => {
   const chapters = ref<Chapter[]>([])
 
   async function loadChapters(bookId: string) {
-    const all = await dbGetAll<any>('chapters')
-    chapters.value = all
-      .filter((c: any) => c.bookId === bookId)
+    /*
+     * Indexed read, not the whole store: `chapters` holds every chapter body of
+     * every book, so selecting the table meant pushing megabytes of HTML across
+     * the storage bridge just to throw most of it away. It delayed opening a
+     * book — and therefore opening 听书 from the mini control.
+     */
+    const rows = await dbGetAllByIndex<any>('chapters', 'bookId', bookId)
+    chapters.value = rows
       .map((c: any) => ({ ...c, bookId: undefined }))
       .sort((a: Chapter, b: Chapter) => a.index - b.index)
   }

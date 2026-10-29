@@ -48,12 +48,12 @@ import okio.ByteString;
  * mode sound human. Everything is still spoken through the same event contract
  * as {@link TtsPlugin}, so the JS player does not care which engine ran.
  *
- * One WebSocket per sentence, but **two sentences are in flight**: while
- * sentence N is playing, sentence N+1 is already being synthesised into its own
- * file. The JS player asks one sentence ahead, so the next file is ready when
- * the current one ends and playback starts immediately instead of waiting for a
- * fresh network round trip. That wait was the long pause at every paragraph
- * boundary.
+ * One WebSocket per utterance, and **two utterances are in flight**: while the
+ * current one is playing, the next is already being synthesised into its own
+ * file. The page speaks a few sentences per utterance (see `chunker.ts`) and
+ * asks one ahead, so the next file is ready when the current one ends and
+ * playback starts immediately instead of waiting for a fresh network round
+ * trip.
  *
  * `prefetch` goes one step further: the page asks for a whole chapter up front,
  * the plugin synthesises it with {@link #PREFETCH_CONCURRENCY} sockets and keeps
@@ -86,11 +86,12 @@ public class EdgeTtsPlugin extends Plugin {
     /** Three sockets at a time keeps a chapter ahead of playback without abusing the endpoint. */
     private static final int PREFETCH_CONCURRENCY = 3;
     /**
-     * Cache ceiling. One sentence is ~8–20 KB at this bitrate, so 400 files is
-     * a few MB of app cache — enough for a couple of chapters, small enough
-     * that Android never counts it against us.
+     * Cache ceiling. One utterance is now a few sentences (~80 characters,
+     * 10–20 KB per second of audio at this bitrate), so a file is ~100 KB and
+     * 150 of them is roughly half an hour of listening — two or three chapters,
+     * small enough that Android never counts it against us.
      */
-    private static final int MAX_CACHE_FILES = 400;
+    private static final int MAX_CACHE_FILES = 150;
     private static final String CACHE_DIR = "edge-tts";
 
     private final OkHttpClient client = new OkHttpClient.Builder()
@@ -691,7 +692,7 @@ public class EdgeTtsPlugin extends Plugin {
                     p.release();
                     return;
                 }
-                notifyStart(job.id);
+                notifyStart(job.id, p.getDuration());
                 p.start();
             });
             mp.setOnCompletionListener(p -> handler.post(() -> finish(job, p)));
@@ -764,9 +765,14 @@ public class EdgeTtsPlugin extends Plugin {
         connect(job);
     }
 
-    private void notifyStart(String id) {
+    /**
+     * @param durationMs real length of the mp3, so the page can place each
+     *                   sentence inside the utterance instead of guessing
+     */
+    private void notifyStart(String id, int durationMs) {
         JSObject data = new JSObject();
         data.put("utteranceId", id);
+        if (durationMs > 0) data.put("duration", durationMs);
         notifyListeners("onStart", data, true);
     }
 

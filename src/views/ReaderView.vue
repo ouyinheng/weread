@@ -3,7 +3,6 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBookStore, useChapterStore, useSettingsStore, useBookmarkStore } from '@/stores'
 import { addHighlight, applyHighlights, loadHighlights, removeHighlight } from '@/utils/highlights'
-import { dbGetAll } from '@/utils/db'
 import type { Book, Chapter, Highlight, HighlightColor } from '@/types'
 import { ensureChapterText, restorePosition } from '@/utils/source/sourceService'
 import ReaderTopBar from '@/components/reader/ReaderTopBar.vue'
@@ -1616,11 +1615,11 @@ onMounted(async () => {
   await chapterStore.loadChapters(bookId)
   chapterList.value = chapterStore.chapters
 
-  const all = await dbGetAll<any>('chapters')
+  // The store just read these rows; re-selecting the whole chapters table would
+  // duplicate megabytes of HTML for no reason.
   const map = new Map<number, string>()
   const urls = new Map<number, string>()
-  for (const c of all) {
-    if (c.bookId !== bookId) continue
+  for (const c of chapterList.value as any[]) {
     if (c.html) map.set(c.index, c.html)
     if (c.remoteUrl) urls.set(c.index, c.remoteUrl)
   }

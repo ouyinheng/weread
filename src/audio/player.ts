@@ -2,27 +2,46 @@
  * The listen-along state machine.
  *
  * Deliberately a plain `await` loop rather than a timer or an event cascade:
- * the engine contract is "speak resolves when this sentence is done", so the
- * loop body is one sentence. That is the whole design, and it is the only one
- * Android's engine allows — there is no pause, so pausing means stopping and
- * remembering which sentence was speaking.
+ * the engine contract is "speak resolves when this chunk is done", so the loop
+ * body is one chunk. Pausing means stopping and remembering which sentence was
+ * speaking (Android has no pause).
  *
- * Engines that queue utterances are given two sentences ahead: the next ones
- * are already synthesising while the current one plays, which removes the
- * silent gap between sentences. One-shot engines stay strictly sequential.
+ * **What is spoken is a chunk, not a sentence.** A chunk is a few consecutive
+ * sentences glued together (see `chunker.ts`) because both engines pay a fixed
+ * cost per `speak()` call — a silent re-arm on the phone engine, a network
+ * round trip on the online one. One sentence per call therefore left an audible
+ * hole at every sentence and paragraph boundary. Chunks are still sentence
+ * aligned, so `index`, 跟读高亮 and progress keep their old meaning.
  *
- * Online voices additionally get a chapter prepared up front (`prefetch`): the
- * page waits for the first few sentences to land on disk, shows that wait as
- * `buffering`, and lets the rest of the chapter stream in behind playback. That
- * turns every later paragraph boundary into local file playback.
+ * Chunks are handed to the engine ahead of time: the next ones are already
+ * synthesising while the current one plays, so the boundary at the end of a
+ * chunk is covered too.
+ *
+ * Online voices additionally get the chapter prepared up front (`prefetch`):
+ * the page waits for the *first* chunk to land on disk (one chunk, not six
+ * sentences — that wait used to be several seconds) and lets the rest stream in
+ * behind playback, so every later boundary is local file playback.
+ *
+ * The highlight walks through the sentences inside a chunk from three sources,
+ * best first: engine character ranges (`onRange`), the chunk's real audio
+ * length when the engine reports one, and finally a self-calibrating estimate
+ * of the voice's characters-per-second.
  *
  * A monotonically increasing `token` guards every await: pause / skip / exit
- * bump it, so a sentence that was in flight when the user acted cannot advance
- * the index afterwards.
+ * bump it, so a chunk that was in flight when the user acted cannot advance the
+ * index afterwards.
  */
 import { computed, ref } from 'vue'
-import { createEngine, TtsCancelled, type EngineReason, type TtsEngine, type TtsVoice } from './tts'
+import {
+  createEngine,
+  TtsCancelled,
+  type EngineReason,
+  type SpeakHooks,
+  type TtsEngine,
+  type TtsVoice,
+} from './tts'
 import type { Sentence } from './segmenter'
+import { buildPlan, sentenceAt, type Chunk } from './chunker'
 
 export type ListenStatus = 'idle' | 'buffering' | 'playing' | 'paused' | 'ended' | 'unavailable'
 
@@ -52,36 +71,34 @@ export interface PlayerDeps {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
-/**
- * How many sentences to have on disk before the first one starts playing.
- *
- * A whole chapter takes ~20–40 s to synthesise, which nobody would sit
- * through. Six sentences is 3–5 s at three concurrent sockets — long enough to
- * cover the first few paragraph boundaries, short enough to feel like pressing
- * play.
- */
-const PREFETCH_HEAD = 6
-
-/** Engines we tell ahead how many sentences? Two is enough to hide the round trip. */
+/** How many chunks to hand the engine ahead of the one playing. */
 const LOOKAHEAD = 2
+
+/**
+ * Fallback speaking speed, 汉字/秒, for engines that report neither character
+ * ranges nor an audio length. It is only the starting guess: every finished
+ * chunk re-measures it (see `calibrate`), so the estimate converges on the real
+ * voice within one chunk — including after the rate slider changes.
+ */
+const DEFAULT_CHARS_PER_SECOND = 4.2
 
 export function useListenPlayer(deps: PlayerDeps) {
   const status = ref<ListenStatus>('idle')
   const index = ref(0)
   const reason = ref<EngineReason | undefined>()
-  /** Sentences of the chapter currently being prepared, for the loading label. */
+  /** Chunks of the chapter currently being prepared, for the loading label. */
   const bufferProgress = ref({ done: 0, total: 0 })
 
   let engine: TtsEngine | null = null
+  /** Engine boot in flight; shared so prewarm and play cannot boot twice. */
+  let booting: Promise<TtsEngine | null> | null = null
+  /** Bumped to supersede an in-flight run. */
   let token = 0
   /** Bumped per prefetch request so stale progress events are dropped. */
   let prefetchSeq = 0
-  /**
-   * The chapter (and settings) already prepared, by identity. Only the first
-   * play of a chapter waits — seeking within a prepared chapter must not flash
-   * the loading state again.
-   */
-  let prepared: { list: Sentence[]; voice: string; rate: number } | null = null
+  /** Measured speaking speed, and the rate it was measured at. */
+  let charsPerSecond = DEFAULT_CHARS_PER_SECOND
+  let calibratedAtRate = 0
 
   /*
    * 'ended' still counts as active: the bar must stay up so the reader can see
@@ -94,72 +111,102 @@ export function useListenPlayer(deps: PlayerDeps) {
   )
   const available = computed(() => status.value !== 'unavailable')
 
+  /**
+   * Create the engine on first use, and tell it to load the voice in the
+   * background.
+   *
+   * `warm()` is the difference between "tap 听书 → 1 s of nothing" and tapping
+   * straight into speech: the engine's cold start (voice data, audio pipeline)
+   * overlaps with loading the chapter instead of following the tap.
+   *
+   * The in-flight promise is shared, because `prewarm` and the first `play`
+   * both ask for the engine and must not boot two speech engines.
+   */
   async function ensureEngine(): Promise<TtsEngine | null> {
     if (engine) return engine
-    engine = await (deps.createEngine || createEngine)()
-    if (engine.kind === 'none') {
-      reason.value = engine.reason
-      status.value = 'unavailable'
-      return null
+    if (!booting) {
+      booting = (async () => {
+        const e = await (deps.createEngine || createEngine)()
+        booting = null
+        if (e.kind === 'none') {
+          reason.value = e.reason
+          status.value = 'unavailable'
+          return null
+        }
+        engine = e
+        e.warm?.()
+        return e
+      })()
     }
-    return engine
+    return booting
+  }
+
+  /** Start the engine early (opening 听书), so `play` does not pay for init. */
+  function prewarm(): void {
+    if (engine) return
+    void ensureEngine().catch(() => undefined)
   }
 
   /**
-   * Get the head of the chapter onto disk, then let the rest stream in.
+   * Get the first chunk onto disk, then let the rest stream in.
+   *
+   * Only the first chunk is awaited. Waiting for a fixed head of six sentences
+   * (the old behaviour) cost several seconds before the first word; one chunk
+   * is ~20 s of audio, which is enough runway for the prefetcher to stay ahead.
    *
    * @returns false when the run was superseded while waiting (pause, skip,
    *          chapter change) and the caller must stop.
    */
   async function prepare(
     e: TtsEngine,
-    list: Sentence[],
-    from: number,
+    chunks: Chunk[],
+    voice: string | undefined,
+    startStatus: ListenStatus,
     gen: number,
   ): Promise<boolean> {
     const s = deps.settings()
-    const voice = s.voice || undefined
+    if (!chunks.length) return true
     if (!e.canPrefetch?.(voice) || !e.prefetch) return true
 
-    const voiceKey = s.voice || ''
-    if (prepared && prepared.list === list && prepared.voice === voiceKey && prepared.rate === s.rate) {
-      return true
-    }
-
-    const head = Math.min(PREFETCH_HEAD, list.length - from)
-    if (head <= 0) return true
+    // One preparation at a time: a seek must not leave the previous
+    // whole-chapter run fighting this one for sockets.
+    await cancelPrefetch()
 
     const seq = ++prefetchSeq
-    status.value = 'buffering'
-    bufferProgress.value = { done: 0, total: head }
-    try {
-      await e.prefetch(
-        list.slice(from, from + head).map(x => x.text),
-        s.rate,
-        voice,
-        (done, total) => {
-          if (seq === prefetchSeq) bufferProgress.value = { done, total }
-        },
-        seq,
-      )
-    } catch {
-      // Preparation is an optimisation, not a requirement: playback below
-      // still synthesises sentence by sentence when it fails.
+    const visible = startStatus !== 'playing'
+    if (visible) {
+      status.value = 'buffering'
+      bufferProgress.value = { done: 0, total: chunks.length }
     }
+
+    let releaseFirst = () => {}
+    const firstReady = new Promise<void>((resolve) => { releaseFirst = resolve })
+
+    const all = e.prefetch(
+      chunks.map(c => c.text),
+      s.rate,
+      voice,
+      (done, total) => {
+        if (seq !== prefetchSeq) return
+        if (visible) bufferProgress.value = { done, total }
+        if (done >= 1) releaseFirst()
+      },
+      seq,
+    ).catch(() => undefined)
+
+    // Whatever finishes first: the first chunk is on disk, or the run died.
+    await Promise.race([firstReady, all])
     if (gen !== token) return false
 
-    prepared = { list, voice: voiceKey, rate: s.rate }
-
-    const rest = list.slice(from + head).map(x => x.text)
-    if (rest.length) {
-      // Not awaited: the point is to be listening while this runs. Its token is
-      // newer than `seq`, so its progress events never touch the UI.
-      void e.prefetch(rest, s.rate, voice, () => {}, ++prefetchSeq).catch(() => undefined)
-    }
+    /*
+     * The remaining chunks keep synthesising behind playback. Not awaited: the
+     * point is to be listening while that happens.
+     */
+    void all
     return true
   }
 
-  /** The loop. Runs one sentence per iteration until the chapter ends. */
+  /** The loop. Runs one chunk per iteration until the chapter ends. */
   async function run(from: number) {
     const e = await ensureEngine()
     if (!e) return
@@ -177,77 +224,169 @@ export function useListenPlayer(deps: PlayerDeps) {
      * treat that rejection as an error and flip the UI to unavailable.
      */
     const my = ++token
+    const startStatus = status.value
     await e.stop()
 
-    const voice = deps.settings().voice || undefined
-    /*
-     * Engines that queue utterances can be told ahead: the next sentences
-     * synthesise while the current one plays, which is what removes the silent
-     * gap at each paragraph boundary. One-shot engines stay sequential.
-     */
-    const lookahead = e.canLookahead?.(voice) === true
-    const queued = new Map<number, Promise<void>>()
-
-    const enqueue = (i: number) => {
-      if (i < 0 || queued.has(i)) return
-      const now = deps.sentences()
-      if (i >= now.length) return
-      const p = e.speak(now[i].text, deps.settings().rate, deps.settings().voice || undefined)
-      // A lookahead promise can fail while the previous sentence still plays.
-      // Mark it handled here; the loop surfaces the error when the sentence is due.
-      p.catch(() => {})
-      queued.set(i, p)
-    }
+    const { rate, voice } = deps.settings()
+    const voiceName = voice || undefined
 
     index.value = clamp(from, 0, list.length - 1)
 
-    /*
-     * Online voices synthesise the chapter to disk first. `buffering` is shown
-     * for that wait only; if the user pauses or skips, the run is superseded
-     * and this returns false instead of starting playback behind their back.
-     */
-    if (!await prepare(e, list, index.value, my)) return
+    const chunks = buildPlan(list, index.value)
+    if (!await prepare(e, chunks, voiceName, startStatus, my)) return
     if (my !== token) return
+
+    const lookahead = e.canLookahead?.(voiceName) === true
+    const queued = new Map<number, Promise<void>>()
+    /**
+     * Cancels the running highlight walk for the current chunk. Held in an
+     * object because it is replaced from inside `walk` and read from the loop —
+     * a plain `let` reads as `null` to the type checker there.
+     */
+    const walker: { stop: (() => void) | null } = { stop: null }
+    const stopWalk = () => {
+      walker.stop?.()
+      walker.stop = null
+    }
+
+    const say = (i: number) => {
+      // Monotonic: a stale walk or a range event from the previous chunk must
+      // never drag the highlight backwards.
+      if (i < 0 || i >= list.length || i <= index.value) return
+      index.value = i
+      deps.onSentence?.(list[i], i)
+    }
+
+    /**
+     * Walk the highlight through a chunk's sentences.
+     *
+     * `durationMs` comes from the engine when it knows the real audio length
+     * (online voice). Otherwise the measured characters-per-second is used,
+     * which is why `calibrate` exists.
+     */
+    const walk = (chunk: Chunk, durationMs?: number) => {
+      stopWalk()
+      if (chunk.to <= chunk.from) return
+      const chars = chunk.text.length
+      const perChar = durationMs && durationMs > 0
+        ? durationMs / chars
+        : 1000 / (charsPerSecond * Math.max(0.5, rate || 1))
+      let handles: ReturnType<typeof setTimeout>[] = []
+      for (let i = chunk.from + 1; i <= chunk.to; i++) {
+        const delay = chunk.starts[i - chunk.from] * perChar
+        handles.push(setTimeout(() => {
+          if (my !== token) return
+          say(i)
+        }, delay))
+      }
+      walker.stop = () => {
+        for (const h of handles) clearTimeout(h)
+        handles = []
+      }
+    }
+
+    /** Learn the voice's real pace from a chunk that just finished. */
+    const calibrate = (chunk: Chunk, startedAt: number) => {
+      const elapsed = Date.now() - startedAt
+      // Too short to measure (a stub engine, a paused chunk): keep the guess.
+      if (elapsed < 300) return
+      const measured = (chunk.text.length / elapsed) * 1000
+      if (!(measured > 0.5 && measured < 40)) return
+      if (calibratedAtRate !== rate) {
+        // First measurement at this pace, or the slider just moved: trust it.
+        charsPerSecond = measured
+        calibratedAtRate = rate
+        return
+      }
+      // Slow EMA: one odd chunk (a pause, a stutter) must not move it far.
+      charsPerSecond = charsPerSecond * 0.7 + measured * 0.3
+    }
+
+    /** Per-utterance subscriptions for one chunk. */
+    const hooksFor = (chunk: Chunk): SpeakHooks => ({
+      onStart: (info) => {
+        if (my !== token) return
+        // Audio starts *now*: re-base the walk on the real length if the
+        // engine reported one, instead of the estimate armed at queue time.
+        walk(chunk, info?.duration)
+      },
+      onRange: (start) => {
+        if (my !== token) return
+        say(sentenceAt(chunk, start))
+      },
+    })
+
+    const speak = (k: number): Promise<void> => {
+      const hit = queued.get(k)
+      if (hit) return hit
+      const chunk = chunks[k]
+      let startedAt = 0
+      const hooks = hooksFor(chunk)
+      const wrapped: SpeakHooks = {
+        onStart: (info) => { startedAt = Date.now(); hooks.onStart?.(info) },
+        onRange: hooks.onRange,
+      }
+      const p = e.speak(chunk.text, rate, voiceName, wrapped)
+      // A lookahead promise can fail while the previous chunk still plays.
+      // Mark it handled here; the loop surfaces the error when it is due.
+      p.catch(() => {})
+      p.then(() => {
+        if (startedAt) calibrate(chunk, startedAt)
+      }).catch(() => {})
+      queued.set(k, p)
+      return p
+    }
 
     status.value = 'playing'
 
-    while (my === token) {
-      // Re-read per iteration: the chapter may have been swapped underneath.
-      const current = deps.sentences()
-      const at = index.value
-      if (at >= current.length) break
-
-      deps.onSentence?.(current[at], at)
-      enqueue(at)
-      if (lookahead) {
-        for (let k = 1; k <= LOOKAHEAD; k++) enqueue(at + k)
-      }
-
-      try {
-        await queued.get(at)
-      } catch (err) {
+    try {
+      for (let k = 0; k < chunks.length; k++) {
         if (my !== token) return
-        // Cancellation is the user's own doing (pause / skip / exit).
-        if (err instanceof TtsCancelled) return
-        // A network voice failing is not a broken phone engine; say so.
-        reason.value = err instanceof Error && err.message === 'edge-failed'
-          ? 'online-failed'
-          : 'engine-init-failed'
-        status.value = 'unavailable'
-        // Silence the sentence that was queued ahead, if any.
-        void e.stop()
-        return
-      } finally {
-        queued.delete(at)
+        const chunk = chunks[k]
+
+        /*
+         * The playhead enters the chunk at its first sentence; the walk moves
+         * it forward while the (now longer) utterance plays.
+         */
+        stopWalk()
+        index.value = chunk.from
+        deps.onSentence?.(list[chunk.from], chunk.from)
+        walk(chunk)
+
+        speak(k)
+        if (lookahead) {
+          for (let n = 1; n <= LOOKAHEAD; n++) {
+            if (k + n < chunks.length) speak(k + n)
+          }
+        }
+
+        try {
+          await queued.get(k)
+        } catch (err) {
+          if (my !== token) return
+          // Cancellation is the user's own doing (pause / skip / exit).
+          if (err instanceof TtsCancelled) return
+          // A network voice failing is not a broken phone engine; say so.
+          reason.value = err instanceof Error && err.message === 'edge-failed'
+            ? 'online-failed'
+            : 'engine-init-failed'
+          status.value = 'unavailable'
+          // Silence the chunk that was queued ahead, if any.
+          void e.stop()
+          return
+        } finally {
+          queued.delete(k)
+        }
       }
 
       if (my !== token) return
-      index.value = at + 1
+      index.value = list.length - 1
+      status.value = 'ended'
+    } finally {
+      stopWalk()
     }
 
     if (my !== token) return
-    status.value = 'ended'
-
     if (!deps.settings().autoNextChapter) return
     const advanced = await deps.onChapterEnd?.()
     if (my !== token || !advanced) return
@@ -260,7 +399,7 @@ export function useListenPlayer(deps: PlayerDeps) {
   }
 
   async function pause() {
-    // Bump first: the in-flight sentence must not advance the index.
+    // Bump first: the in-flight chunk must not advance the index.
     token++
     status.value = 'paused'
     await cancelPrefetch()
@@ -317,7 +456,6 @@ export function useListenPlayer(deps: PlayerDeps) {
     status.value = 'idle'
     index.value = 0
     bufferProgress.value = { done: 0, total: 0 }
-    prepared = null
     await cancelPrefetch()
     await engine?.stop()
   }
@@ -327,7 +465,11 @@ export function useListenPlayer(deps: PlayerDeps) {
    * new setting is audible now rather than from the next sentence.
    */
   async function restartCurrent() {
-    if (status.value === 'playing') await run(index.value)
+    if (status.value === 'playing') {
+      // New voice or pace invalidates the measurement.
+      calibratedAtRate = 0
+      await run(index.value)
+    }
   }
 
   /**
@@ -352,6 +494,7 @@ export function useListenPlayer(deps: PlayerDeps) {
     bufferProgress,
     active,
     available,
+    prewarm,
     play,
     pause,
     toggle,

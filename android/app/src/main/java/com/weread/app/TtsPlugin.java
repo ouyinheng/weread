@@ -49,6 +49,20 @@ public class TtsPlugin extends Plugin {
     private TextToSpeech engine;
     private volatile boolean initialised = false;
     private volatile String failure = REASON_NOT_READY;
+    /**
+     * What the engine is currently configured with.
+     *
+     * `setSpeechRate` / `setVoice` are not free: several Chinese engines reload
+     * the voice data and re-arm the synthesis pipeline when they are called, so
+     * doing it before *every* utterance added a hole between paragraphs. They
+     * are now applied only when the value actually changes.
+     */
+    private float appliedRate = -1f;
+    private String appliedVoice = null;
+    private boolean warmed = false;
+
+    /** Utterance id of the silent warm-up; never settles a JS promise. */
+    private static final String WARM_ID = "tts-warmup";
 
     @Override
     public void load() {
@@ -86,6 +100,23 @@ public class TtsPlugin extends Plugin {
                 notifyListeners("onDone", data, true);
             }
 
+            /**
+             * The characters being spoken right now, inside the utterance.
+             *
+             * The player speaks a few sentences per utterance, so this is what
+             * lets 跟读高亮 follow sentence by sentence without timers. Added in
+             * API 26: on older devices the method is simply never called and
+             * the player falls back to its own estimate.
+             */
+            @Override
+            public void onRangeStart(String utteranceId, int start, int end, int frame) {
+                JSObject data = new JSObject();
+                data.put("utteranceId", utteranceId);
+                data.put("start", start);
+                data.put("end", end);
+                notifyListeners("onRange", data, true);
+            }
+
             /** Pre-21 signature is still abstract on the base class. */
             @Override
             @SuppressWarnings("deprecation")
@@ -115,7 +146,24 @@ public class TtsPlugin extends Plugin {
     }
 
     /**
-     * @param text  one sentence; the player never sends a whole chapter
+     * Load the voice before the user presses play.
+     *
+     * The first real sentence used to wait for the engine to pull its voice
+     * data in and open the audio pipeline — audible as "点了听书，先愣一秒".
+     * A punctuation-only utterance synthesises to silence but does that work,
+     * and it is flushed by the `stop()` that precedes playback.
+     */
+    @PluginMethod
+    public void warm(PluginCall call) {
+        call.resolve();
+        if (warmed || !initialised || engine == null || failure != null) return;
+        warmed = true;
+        engine.speak("。", TextToSpeech.QUEUE_ADD, new Bundle(), WARM_ID);
+    }
+
+    /**
+     * @param text  one utterance — a few sentences; the player never sends a
+     *              whole chapter
      * @param rate  1.0 is the engine's natural speed
      * @param voice engine voice name from {@link #getVoices}, optional
      */
@@ -133,13 +181,19 @@ public class TtsPlugin extends Plugin {
         double rate = call.getDouble("rate", 1.0);
         String voiceName = call.getString("voice");
 
-        engine.setSpeechRate((float) Math.max(0.3, Math.min(3.0, rate)));
-        applyVoice(voiceName);
+        float clamped = (float) Math.max(0.3, Math.min(3.0, rate));
+        if (appliedRate != clamped) {
+            engine.setSpeechRate(clamped);
+            appliedRate = clamped;
+        }
+        if (voiceName != null && !voiceName.isEmpty() && !voiceName.equals(appliedVoice)) {
+            if (applyVoice(voiceName)) appliedVoice = voiceName;
+        }
 
         String utteranceId = UUID.randomUUID().toString();
         Bundle params = new Bundle();
-        // QUEUE_ADD lets the JS player hand us the next sentence while this one
-        // is still playing, so the engine synthesises ahead instead of leaving
+        // QUEUE_ADD lets the JS player hand us the next chunk while this one is
+        // still playing, so the engine synthesises ahead instead of leaving
         // a silent gap. Every playback path calls stop() first, so the queue is
         // empty when a new run starts; FLUSH is not needed.
         int queued = engine.speak(text, TextToSpeech.QUEUE_ADD, params, utteranceId);
@@ -178,17 +232,18 @@ public class TtsPlugin extends Plugin {
         call.resolve(out);
     }
 
-    private void applyVoice(String voiceName) {
-        if (voiceName == null || voiceName.isEmpty()) return;
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
+    private boolean applyVoice(String voiceName) {
+        if (voiceName == null || voiceName.isEmpty()) return false;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return false;
         Set<Voice> voices = engine.getVoices();
-        if (voices == null) return;
+        if (voices == null) return false;
         for (Voice v : voices) {
             if (v.getName().equals(voiceName)) {
                 engine.setVoice(v);
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     @Override

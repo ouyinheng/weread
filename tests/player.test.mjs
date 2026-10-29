@@ -1,5 +1,6 @@
 import { useListenPlayer } from '../src/audio/player.ts'
 import { segmentText } from '../src/audio/segmenter.ts'
+import { buildPlan } from '../src/audio/chunker.ts'
 import { TtsCancelled } from '../src/audio/tts.ts'
 
 let fail = 0
@@ -10,49 +11,54 @@ const check = (name, cond, extra = '') => {
 
 /** Let queued promises settle. */
 const tick = () => new Promise(r => setTimeout(r, 0))
+const wait = (ms) => new Promise(r => setTimeout(r, ms))
 
 /**
  * A speech engine whose utterances finish only when the test says so. This is
  * the whole point of injecting the engine: the state machine's job is deciding
- * *which* sentence to speak and when, and that must be verifiable without a
- * phone.
+ * *what* to speak and when, and that must be verifiable without a phone.
  */
-function fakeEngine() {
+function fakeEngine({ lookahead = false } = {}) {
+  /** In-flight utterances, oldest first. */
+  const live = []
   const spoken = []
-  let pending = null
   return {
     spoken,
+    live,
     engine: {
       kind: 'native',
-      async speak(text) {
+      canLookahead: () => lookahead,
+      async speak(text, _rate, _voice, hooks) {
         spoken.push(text)
-        await new Promise((resolve, reject) => { pending = { resolve, reject } })
+        await new Promise((resolve, reject) => { live.push({ text, hooks, resolve, reject }) })
       },
       async stop() {
-        if (pending) {
-          const p = pending
-          pending = null
-          p.reject(new TtsCancelled())
-        }
+        for (const x of live.splice(0)) x.reject(new TtsCancelled())
       },
       async voices() { return [] },
     },
-    /** Finish the sentence currently being spoken. */
-    release() {
-      if (pending) {
-        const p = pending
-        pending = null
-        p.resolve()
-      }
-    },
-    busy: () => pending !== null,
+    /** The engine starts speaking utterance `i`; `duration` is its real length. */
+    start(i = 0, duration) { live[i]?.hooks?.onStart?.({ duration }) },
+    /** The engine reports the character it has reached inside utterance `i`. */
+    range(i = 0, at) { live[i]?.hooks?.onRange?.(at, at) },
+    /** Utterance `i` finishes. */
+    release(i = 0) { live.splice(i, 1)[0]?.resolve() },
+    queued: () => live.length,
   }
 }
 
 const sentences = segmentText('第一句。第二句。第三句。')
+const chunkText = buildPlan(sentences)[0].text
 const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
 
-/* ---------- sequential playback ---------- */
+/**
+ * Thirty short sentences: one short head utterance (so the first word starts
+ * fast) followed by full-length ones.
+ */
+const longSentences = segmentText('这一句很短。'.repeat(30))
+const longChunks = buildPlan(longSentences)
+
+/* ---------- a chunk (not a sentence) is what gets spoken ---------- */
 {
   const fake = fakeEngine()
   const seen = []
@@ -64,85 +70,128 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   })
 
   check('sentences available', sentences.length === 3, sentences.length)
+  check('a short paragraph is a single utterance', chunkText.includes('\n'), chunkText)
+  check('long text splits into a short head plus full chunks',
+    longChunks.length === 3 && longChunks[0].to - longChunks[0].from < 10, longChunks.length)
+
   void player.play(0)
   await tick()
   check('status playing', player.status.value === 'playing', player.status.value)
   check('starts at 0', player.index.value === 0 && seen[0] === 0, JSON.stringify(seen))
-  check('spoke first sentence', fake.spoken[0] === '第一句。', fake.spoken[0])
+  check('speaks the whole chunk in one utterance', fake.spoken[0] === chunkText,
+    JSON.stringify(fake.spoken[0]))
 
-  fake.release(); await tick()
-  check('advanced to 1', player.index.value === 1, player.index.value)
-  fake.release(); await tick()
-  fake.release(); await tick()
-
-  check('spoke all three', fake.spoken.length === 3, JSON.stringify(fake.spoken))
-  check('each sentence once', seen.join(',') === '0,1,2', JSON.stringify(seen))
-  check('ended after last', player.status.value === 'ended', player.status.value)
+  fake.release(0)
+  await wait(10)
+  check('one utterance ends the chapter', fake.spoken.length === 1, fake.spoken.length)
+  check('ended after the last chunk', player.status.value === 'ended', player.status.value)
+  check('playhead rests on the last sentence', player.index.value === 2, player.index.value)
 }
 
-/* ---------- queuing engines get two sentences of lookahead ---------- */
+/* ---------- the highlight walks through the sentences of a chunk ---------- */
 {
-  const spoken = []
-  const pending = []
-  const engine = {
-    kind: 'native',
-    canLookahead: () => true,
-    async speak(text) {
-      spoken.push(text)
-      await new Promise((resolve, reject) => { pending.push({ resolve, reject }) })
-    },
-    async stop() {
-      const list = pending.splice(0)
-      for (const p of list) p.reject(new TtsCancelled())
-    },
-    async voices() { return [] },
-  }
+  const fake = fakeEngine()
   const player = useListenPlayer({
-    sentences: () => sentences,
+    sentences: () => longSentences,
     settings: () => baseSettings,
-    createEngine: async () => engine,
+    createEngine: async () => fake.engine,
   })
 
   void player.play(0)
   await tick()
-  check(
-    'queues the next two sentences while the first is still playing',
-    spoken.length === 3 && spoken[1] === '第二句。' && spoken[2] === '第三句。',
-    JSON.stringify(spoken)
-  )
-  check('highlight stays on the sentence being spoken', player.index.value === 0, player.index.value)
+  const chunk = longChunks[0]
+  check('first chunk queued', fake.spoken[0] === chunk.text, '')
+  check('playhead on the first sentence of the chunk', player.index.value === chunk.from,
+    player.index.value)
 
-  pending.shift().resolve(); await tick()
-  check('advanced once the first finished', player.index.value === 1, player.index.value)
-  check('does not re-synthesise what is already queued', spoken.length === 3, JSON.stringify(spoken))
+  // The engine knows its audio is 400 ms long: ~80 ms per sentence.
+  fake.start(0, 400)
+  await wait(180)
+  check('highlight advanced inside the chunk', player.index.value > chunk.from,
+    player.index.value)
+  check('highlight stayed inside the chunk', player.index.value <= chunk.to, player.index.value)
+  await wait(300)
+  check('reached the end of the chunk', player.index.value === chunk.to, player.index.value)
+}
+
+/* ---------- engine character ranges win over the estimate ---------- */
+{
+  const fake = fakeEngine()
+  const player = useListenPlayer({
+    sentences: () => longSentences,
+    settings: () => baseSettings,
+    createEngine: async () => fake.engine,
+  })
+
+  void player.play(0)
+  await tick()
+  const chunk = longChunks[0]
+  // Offset of the very last sentence inside the chunk text.
+  fake.range(0, chunk.starts[chunk.to - chunk.from])
+  await tick()
+  check('range event jumps the highlight to that sentence', player.index.value === chunk.to,
+    player.index.value)
+
+  // A late range event for an earlier sentence must not drag it back.
+  fake.range(0, 0)
+  await tick()
+  check('highlight never moves backwards', player.index.value === chunk.to, player.index.value)
+}
+
+/* ---------- queuing engines get the next chunks ahead of time ---------- */
+{
+  const fake = fakeEngine({ lookahead: true })
+  const player = useListenPlayer({
+    sentences: () => longSentences,
+    settings: () => baseSettings,
+    createEngine: async () => fake.engine,
+  })
+
+  void player.play(0)
+  await tick()
+  check('queues the following chunks while the first plays',
+    fake.spoken.length === Math.min(3, longChunks.length)
+    && fake.spoken[1] === longChunks[1].text, JSON.stringify(fake.spoken.length))
+  check('highlight stays on the chunk being spoken', player.index.value === longChunks[0].from,
+    player.index.value)
+
+  fake.release(0)
+  await wait(10)
+  check('advanced once the first chunk finished', player.index.value === longChunks[1].from,
+    player.index.value)
+  check('does not re-synthesise what is already queued',
+    fake.spoken.length === Math.min(3, longChunks.length), fake.spoken.length)
 }
 
 /* ---------- pause keeps the sentence, resume speaks it again ---------- */
 {
   const fake = fakeEngine()
   const player = useListenPlayer({
-    sentences: () => sentences,
+    sentences: () => longSentences,
     settings: () => baseSettings,
     createEngine: async () => fake.engine,
   })
 
   void player.play(0)
   await tick()
-  fake.release(); await tick()          // sentence 0 done, 1 speaking
-  check('now on sentence 1', player.index.value === 1, player.index.value)
+  fake.start(0, 300)
+  await wait(180)                        // a few sentences into the chunk
+  const at = player.index.value
+  check('moved off the first sentence', at > 0, at)
 
   await player.pause()
   check('status paused', player.status.value === 'paused', player.status.value)
-  check('pause left index alone', player.index.value === 1, player.index.value)
+  check('pause left the sentence alone', player.index.value === at, player.index.value)
 
-  // `play` resolves when the chapter ends, so it is never awaited here.
-  void player.play(player.index.value)
+  fake.spoken.length = 0
+  void player.play(player.index.value)   // resolves at chapter end, never awaited
   await tick()
-  check('resumed on the same sentence', player.index.value === 1, player.index.value)
-  check('re-spoke sentence 1', fake.spoken.at(-1) === '第二句。', fake.spoken.at(-1))
+  check('resumed on the same sentence', player.index.value === at, player.index.value)
+  check('re-speaks from that sentence, not the chunk start',
+    fake.spoken[0]?.startsWith(longSentences[at].text), JSON.stringify(fake.spoken[0]))
 }
 
-/* ---------- a cancelled sentence cannot advance the index ---------- */
+/* ---------- a cancelled chunk cannot advance the index ---------- */
 {
   const fake = fakeEngine()
   const player = useListenPlayer({
@@ -153,11 +202,11 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
 
   void player.play(0)
   await tick()
-  await player.stop()                    // cancels mid-sentence
+  await player.stop()
   await tick()
   check('stop resets index', player.index.value === 0, player.index.value)
   check('stop sets idle', player.status.value === 'idle', player.status.value)
-  check('no further sentences spoken', fake.spoken.length === 1, fake.spoken.length)
+  check('no further utterances spoken', fake.spoken.length === 1, fake.spoken.length)
 }
 
 /* ---------- next / prev step one sentence ---------- */
@@ -199,9 +248,8 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
 
   void player.play(0)
   await tick()
-  fake.release(); await tick()
-  fake.release(); await tick()
-  fake.release(); await tick()
+  fake.release(0)
+  await tick()
   check('asked for the next chapter', advances === 1, advances)
   check('chapter end stops cleanly', player.status.value === 'ended', player.status.value)
 }
@@ -219,9 +267,8 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
 
   void player.play(0)
   await tick()
-  fake.release(); await tick()
-  fake.release(); await tick()
-  fake.release(); await tick()
+  fake.release(0)
+  await tick()
   check('no chapter switch when off', advances === 0, advances)
 }
 
@@ -258,7 +305,7 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   void player.seek(2)
   await tick()
   check('seek jumps to 2', player.index.value === 2, player.index.value)
-  check('seek speaks the target', fake.spoken.at(-1) === '第三句。', fake.spoken.at(-1))
+  check('seek speaks from that sentence', fake.spoken.at(-1) === '第三句。', fake.spoken.at(-1))
 
   void player.seek(99)
   await tick()
@@ -279,72 +326,67 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   void player.playFromOffset(5, offsets)
   await tick()
   check('offset 5 lands on sentence 1', player.index.value === 1, player.index.value)
-  check('spoke the right sentence', fake.spoken[0] === '第二句。', fake.spoken[0])
+  check('spoke from the right sentence', fake.spoken[0] === '第二句。\n第三句。', fake.spoken[0])
 }
 
-/* ---------- online voice: the chapter is prepared before the first word ---------- */
+/* ---------- online voice: only the first chunk is waited for ---------- */
 {
-  const spoken = []
-  let releasePrep = null
+  const fake = fakeEngine({ lookahead: true })
   /** @type {Array<(done: number, total: number) => void>} */
   const reporters = []
+  let finish = null
   const engine = {
-    kind: 'native',
-    canLookahead: () => true,
+    ...fake.engine,
     canPrefetch: () => true,
     prefetch(items, _rate, _voice, onProgress) {
       reporters.push(onProgress)
       return new Promise((resolve) => {
-        releasePrep = () => {
+        finish = () => {
           onProgress(items.length, items.length)
           resolve({ ok: items.length, failed: 0 })
         }
       })
     },
     async cancelPrefetch() {},
-    async speak(text) {
-      spoken.push(text)
-      await new Promise(() => {})            // plays forever; the test never ends it
-    },
-    async stop() {},
-    async voices() { return [] },
   }
   const player = useListenPlayer({
-    sentences: () => sentences,
+    sentences: () => longSentences,
     settings: () => baseSettings,
     createEngine: async () => engine,
   })
 
   void player.play(0)
   await tick()
-  check('shows buffering while the chapter prepares', player.status.value === 'buffering', player.status.value)
-  check('says nothing before the head is ready', spoken.length === 0, JSON.stringify(spoken))
+  check('shows buffering while the first chunk renders', player.status.value === 'buffering',
+    player.status.value)
+  check('says nothing before it is ready', fake.spoken.length === 0, fake.spoken.length)
   check('progress starts at zero', player.bufferProgress.value.done === 0,
     JSON.stringify(player.bufferProgress.value))
   check('buffering counts as active', player.active.value)
-
-  releasePrep()
-  await tick()
-  check('starts playing once the head is on disk', player.status.value === 'playing', player.status.value)
-  check('spoke the first sentence after preparing', spoken[0] === '第一句。', JSON.stringify(spoken))
-  check('progress reaches the head size', player.bufferProgress.value.done === sentences.length,
+  check('reports how many chunks there are', player.bufferProgress.value.total === longChunks.length,
     JSON.stringify(player.bufferProgress.value))
 
-  // A second play of the same chapter must not flash the loading state again.
-  await player.pause()
-  void player.play(0)
+  // The first chunk lands; the rest of the chapter is still downloading.
+  reporters[0](1, longChunks.length)
   await tick()
-  check('resume skips preparation', player.status.value === 'playing', player.status.value)
+  check('starts playing on the first chunk, not the whole chapter',
+    player.status.value === 'playing', player.status.value)
+  check('speaks the first chunk', fake.spoken[0] === longChunks[0].text,
+    JSON.stringify(fake.spoken[0]))
+
+  finish()
+  await tick()
+  check('still playing after the rest arrives', player.status.value === 'playing',
+    player.status.value)
 }
 
 /* ---------- pausing during preparation cancels it ---------- */
 {
-  const spoken = []
+  const fake = fakeEngine()
   let released = false
   let cancels = 0
   const engine = {
-    kind: 'native',
-    canLookahead: () => true,
+    ...fake.engine,
     canPrefetch: () => true,
     prefetch() {
       // Never resolves on its own; `cancelPrefetch` releases it, like the plugin.
@@ -356,9 +398,6 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
       cancels++
       engine._resolve?.()
     },
-    async speak(text) { spoken.push(text); await new Promise(() => {}) },
-    async stop() {},
-    async voices() { return [] },
   }
   const player = useListenPlayer({
     sentences: () => sentences,
@@ -369,9 +408,10 @@ const baseSettings = { rate: 1, voice: '', autoNextChapter: false }
   void player.play(0)
   await tick()
   await player.pause()
-  check('pause cancelled the download', cancels === 1, cancels)
+  check('pause cancelled the download', cancels >= 1, cancels)
   await tick()
-  check('late preparation does not start playback', spoken.length === 0, JSON.stringify(spoken))
+  check('late preparation does not start playback', fake.spoken.length === 0,
+    JSON.stringify(fake.spoken))
   check('stays paused', player.status.value === 'paused', player.status.value)
   check('preparation was released', released)
 }

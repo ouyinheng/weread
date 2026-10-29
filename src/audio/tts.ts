@@ -27,14 +27,34 @@ export interface TtsVoice {
   provider?: 'edge'
 }
 
+/** Payload of every playback event; `duration` is ms, when the engine knows it. */
+export interface TtsEvent {
+  utteranceId: string
+  /** Length of the utterance just started, in ms (online engine only). */
+  duration?: number
+}
+
+/** Character range the engine is speaking right now, inside the utterance. */
+export interface TtsRangeEvent {
+  utteranceId: string
+  start: number
+  end: number
+}
+
 export interface NativeTtsPlugin {
   isAvailable(): Promise<{ available: boolean; reason?: string }>
   speak(o: { text: string; rate?: number; voice?: string }): Promise<{ utteranceId: string; queued: boolean }>
   stop(): Promise<void>
   getVoices(): Promise<{ voices: TtsVoice[] }>
+  /** Pre-load the voice so the first real sentence starts without a stall. */
+  warm?(): Promise<void>
   addListener(
     event: 'onStart' | 'onDone' | 'onError',
-    cb: (d: { utteranceId: string }) => void
+    cb: (d: TtsEvent) => void
+  ): Promise<{ remove: () => Promise<void> }>
+  addListener(
+    event: 'onRange',
+    cb: (d: TtsRangeEvent) => void
   ): Promise<{ remove: () => Promise<void> }>
 }
 
@@ -64,7 +84,7 @@ export interface NativeEdgeTtsPlugin {
   stop(): Promise<void>
   addListener(
     event: 'onStart' | 'onDone' | 'onError',
-    cb: (d: { utteranceId: string }) => void
+    cb: (d: TtsEvent) => void
   ): Promise<{ remove: () => Promise<void> }>
   addListener(
     event: 'onPrefetchProgress',
@@ -239,6 +259,19 @@ export type EngineReason =
   | 'engine-init-failed'
   | 'online-failed'
 
+/**
+ * Per-utterance subscription.
+ *
+ * `onStart` fires when audio actually begins — that is the only reliable
+ * "now" reference for walking the highlight through a multi-sentence chunk.
+ * `onRange` is the exact answer where the engine provides one; the player
+ * falls back to a calibrated estimate when it does not.
+ */
+export interface SpeakHooks {
+  onStart?(info: { duration?: number }): void
+  onRange?(start: number, end: number): void
+}
+
 export interface TtsEngine {
   kind: EngineKind
   reason?: EngineReason
@@ -249,10 +282,16 @@ export interface TtsEngine {
    */
   canLookahead?(voice?: string): boolean
   /** Resolves when the utterance has finished playing. */
-  speak(text: string, rate: number, voice?: string): Promise<void>
+  speak(text: string, rate: number, voice?: string, hooks?: SpeakHooks): Promise<void>
   /** Stops immediately; any in-flight `speak()` rejects as cancelled. */
   stop(): Promise<void>
   voices(): Promise<TtsVoice[]>
+  /**
+   * Pre-load whatever the first sentence would otherwise wait for (voice data,
+   * audio pipeline). Best-effort and silent; called before playback starts so
+   * the wait overlaps with loading the chapter instead of following a tap.
+   */
+  warm?(): void
   /**
    * True when this voice can be synthesised to disk before playback. Only the
    * online engine can: on-device engines have no way to render audio to a file
@@ -305,7 +344,10 @@ function noneEngine(reason: EngineReason): TtsEngine {
 
 async function nativeEngine(plugin: NativeTtsPlugin): Promise<TtsEngine> {
   /** utteranceId → settle hooks for the sentence currently being spoken. */
-  const pending = new Map<string, { resolve: () => void; reject: (e: unknown) => void }>()
+  const pending = new Map<
+    string,
+    { resolve: () => void; reject: (e: unknown) => void; hooks?: SpeakHooks }
+  >()
 
   const settle = (id: string, ok: boolean) => {
     const hooks = pending.get(id)
@@ -318,17 +360,29 @@ async function nativeEngine(plugin: NativeTtsPlugin): Promise<TtsEngine> {
   // Registered up front: a listener attached lazily races the first `speak`.
   await plugin.addListener('onDone', ({ utteranceId }) => settle(utteranceId, true))
   await plugin.addListener('onError', ({ utteranceId }) => settle(utteranceId, false))
+  await plugin.addListener('onStart', ({ utteranceId, duration }) => {
+    pending.get(utteranceId)?.hooks?.onStart?.({ duration })
+  })
+  // Word-level ranges (API 26+). Emitted by the engine as it speaks, so the
+  // highlight can follow a multi-sentence utterance sentence by sentence.
+  try {
+    await plugin.addListener('onRange', ({ utteranceId, start, end }) => {
+      pending.get(utteranceId)?.hooks?.onRange?.(start, end)
+    })
+  } catch {
+    // Older plugin build without range events: the player estimates instead.
+  }
 
   return {
     kind: 'native',
     // Android queues with QUEUE_ADD, so the next sentence can be prepared while
     // the current one is still playing.
     canLookahead: () => true,
-    async speak(text, rate, voice) {
+    async speak(text, rate, voice, hooks) {
       const { utteranceId, queued } = await plugin.speak({ text, rate, voice })
       if (!queued) throw new Error('tts-rejected')
       await new Promise<void>((resolve, reject) => {
-        pending.set(utteranceId, { resolve, reject })
+        pending.set(utteranceId, { resolve, reject, hooks })
       })
     },
     async stop() {
@@ -339,6 +393,11 @@ async function nativeEngine(plugin: NativeTtsPlugin): Promise<TtsEngine> {
        */
       for (const hooks of pending.values()) hooks.reject(new TtsCancelled())
       pending.clear()
+    },
+    warm() {
+      // Silence the engine's cold start: load the voice now, while the chapter
+      // text is still being read out of the database.
+      void plugin.warm?.().catch(() => undefined)
     },
     async voices() {
       try {
@@ -365,7 +424,7 @@ function webEngine(): TtsEngine | null {
     kind: 'web',
     // `speechSynthesis.speak` appends to its own queue.
     canLookahead: () => true,
-    speak(text, rate, voice) {
+    speak(text, rate, voice, hooks) {
       return new Promise<void>((resolve, reject) => {
         const utter = new SpeechSynthesisUtterance(text)
         utter.lang = 'zh-CN'
@@ -373,6 +432,10 @@ function webEngine(): TtsEngine | null {
         if (voice) {
           const match = (synth.getVoices() || []).find(v => v.name === voice)
           if (match) utter.voice = match
+        }
+        utter.onstart = () => hooks?.onStart?.({})
+        utter.onboundary = (e) => {
+          if (e.name === 'word' || e.name === 'sentence') hooks?.onRange?.(e.charIndex, e.charIndex + (e.charLength || 0))
         }
         utter.onend = () => resolve()
         utter.onerror = () => reject(new Error('tts-error'))
@@ -397,7 +460,10 @@ function webEngine(): TtsEngine | null {
  * into "在线音色合成失败" instead of blaming the phone's speech engine.
  */
 async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
-  const pending = new Map<string, { resolve: () => void; reject: (e: unknown) => void }>()
+  const pending = new Map<
+    string,
+    { resolve: () => void; reject: (e: unknown) => void; hooks?: SpeakHooks }
+  >()
   /** token → the callback that one `prefetch` call is waiting on. */
   const progress = new Map<number, (done: number, total: number) => void>()
 
@@ -411,6 +477,14 @@ async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
 
   await plugin.addListener('onDone', ({ utteranceId }) => settle(utteranceId, true))
   await plugin.addListener('onError', ({ utteranceId }) => settle(utteranceId, false))
+  /*
+   * The plugin knows the mp3's exact length once it is prepared, which lets the
+   * player place each sentence inside the chunk instead of guessing at a fixed
+   * characters-per-second.
+   */
+  await plugin.addListener('onStart', ({ utteranceId, duration }) => {
+    pending.get(utteranceId)?.hooks?.onStart?.({ duration })
+  })
   await plugin.addListener('onPrefetchProgress', (d) => {
     progress.get(d.token)?.(d.done ?? 0, d.total ?? 0)
   })
@@ -448,7 +522,7 @@ async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
         // Nothing was running.
       }
     },
-    async speak(text, rate, voice) {
+    async speak(text, rate, voice, hooks) {
       const curated = EDGE_VOICES.find(v => v.id === voice) || EDGE_VOICES[0]
       const { utteranceId, queued } = await plugin.speak({
         text,
@@ -458,7 +532,7 @@ async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
       })
       if (!queued) throw new Error('edge-failed')
       await new Promise<void>((resolve, reject) => {
-        pending.set(utteranceId, { resolve, reject })
+        pending.set(utteranceId, { resolve, reject, hooks })
       })
     },
     async stop() {
@@ -495,10 +569,15 @@ function compositeEngine(system: TtsEngine, edge: TtsEngine): TtsEngine {
       if (system.kind === 'none') return edge.canLookahead?.(voice) === true
       return system.canLookahead?.(voice) === true
     },
-    speak(text, rate, voice) {
-      if (isOnline(voice)) return edge.speak(text, rate, voice)
-      if (system.kind === 'none') return edge.speak(text, rate, EDGE_VOICES[0].id)
-      return system.speak(text, rate, voice)
+    speak(text, rate, voice, hooks) {
+      if (isOnline(voice)) return edge.speak(text, rate, voice, hooks)
+      if (system.kind === 'none') return edge.speak(text, rate, EDGE_VOICES[0].id, hooks)
+      return system.speak(text, rate, voice, hooks)
+    },
+    warm() {
+      // Warm both: the chosen voice is only known per call, and warming is
+      // silent and cheap. The system engine is the one with a real cold start.
+      system.warm?.()
     },
     /*
      * Only the online path can be prepared ahead. When the phone's own engine
@@ -536,7 +615,7 @@ async function systemEngine(): Promise<TtsEngine> {
   } catch {
     return noneEngine('no-engine')
   }
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 30; attempt++) {
     try {
       const status = await plugin.isAvailable()
       if (status.available) return nativeEngine(plugin)
@@ -546,7 +625,7 @@ async function systemEngine(): Promise<TtsEngine> {
     } catch {
       return noneEngine('no-engine')
     }
-    await new Promise(r => setTimeout(r, 150))
+    await new Promise(r => setTimeout(r, 100))
   }
   return noneEngine('engine-not-ready')
 }
@@ -568,9 +647,10 @@ async function onlineEngine(): Promise<TtsEngine | null> {
  * Pick the best available engine.
  *
  * The native engine initialises asynchronously, so the first call after a cold
- * start can legitimately answer `engine-not-ready`. Poll for ~1.2s before
- * declaring it broken — that is faster than the engine's worst case but long
- * enough to cover a warm cache.
+ * start can legitimately answer `engine-not-ready`. Poll for ~3s before
+ * declaring it broken: giving up early turns a slow-but-fine engine into a
+ * "not supported" screen, and the caller warms this up in parallel with loading
+ * the chapter so the wait is usually invisible anyway.
  */
 export async function createEngine(): Promise<TtsEngine> {
   if (Capacitor.isNativePlatform()) {

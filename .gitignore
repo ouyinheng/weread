@@ -57,3 +57,8 @@ android/app/src/main/res/xml/config.xml
 *.jks
 *.keystore
 *.hprof
+android/keystore.properties
+
+# 截图脚本的中间产物：仓库只留 README 用的那张 4 合一
+assets/screenshots/*
+!assets/screenshots/overview.png

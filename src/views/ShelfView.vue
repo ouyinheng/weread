@@ -213,6 +213,28 @@ async function removeSelected() {
 onMounted(() => {
   store.loadBooks()
 })
+
+/* ---- 模板事件 ---- */
+function handleOpenSearch(): void {
+  void router.push({ name: 'search' })
+}
+
+function handlePickSort(t: { key: SortKey }): void {
+  sortKey.value = t.key
+}
+
+function handleBookClick(book: Book, e: MouseEvent): void {
+  if (selectMode.value) toggleSelected(book.id)
+  else openBook(book.id, e)
+}
+
+function handleCloseMenu(): void {
+  menuBook.value = null
+}
+
+function handleRestartBook(book: Book): void {
+  void restartBook(book.id)
+}
 </script>
 
 <template>
@@ -220,7 +242,7 @@ onMounted(() => {
     <header class="shelf__header">
       <!-- The pill is the entry: a 「书城」 button inside a search field pointed
            at the same page while promising a store that no longer exists. -->
-      <button class="shelf__search" aria-label="搜索书籍" @click="router.push({ name: 'search' })">
+      <button class="shelf__search" aria-label="搜索书籍" @click="handleOpenSearch">
         <Icon name="search" :size="17" />
         <span class="shelf__search-text">搜本书</span>
       </button>
@@ -250,7 +272,7 @@ onMounted(() => {
         :key="t.key"
         class="shelf__tab"
         :class="{ 'shelf__tab--active': sortKey === t.key }"
-        @click="sortKey = t.key"
+        @click="handlePickSort(t)"
       >
         {{ t.label }}
       </button>
@@ -277,7 +299,7 @@ onMounted(() => {
           :key="book.id"
           class="shelf__item"
           :class="{ 'shelf__item--selected': selected.has(book.id) }"
-          @click="selectMode ? toggleSelected(book.id) : openBook(book.id, $event)"
+          @click="handleBookClick(book, $event)"
           @touchstart.passive="onItemPressStart(book)"
           @touchend.passive="onItemPressEnd"
           @touchmove.passive="onItemPressEnd"
@@ -301,7 +323,7 @@ onMounted(() => {
     </main>
 
     <!-- Book context menu -->
-    <div v-if="menuBook" class="mask" @click.self="menuBook = null">
+    <div v-if="menuBook" class="mask" @click.self="handleCloseMenu">
       <div class="sheet">
         <div class="sheet__header">
           <span class="sheet__title">{{ menuBook.title }}</span>
@@ -310,10 +332,10 @@ onMounted(() => {
           >
         </div>
         <button class="sheet__item" @click="continueReading(menuBook)">继续阅读</button>
-        <button class="sheet__item" @click="restartBook(menuBook.id)">从头开始</button>
+        <button class="sheet__item" @click="handleRestartBook(menuBook)">从头开始</button>
         <button class="sheet__item sheet__item--danger" @click="confirmDelete(menuBook)">移出书架</button>
         <div class="sheet__gap" />
-        <button class="sheet__item sheet__item--cancel" @click="menuBook = null">取消</button>
+        <button class="sheet__item sheet__item--cancel" @click="handleCloseMenu">取消</button>
       </div>
     </div>
 

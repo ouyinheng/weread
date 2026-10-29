@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useSettingsStore } from '@/stores'
 import type { ThemeId } from '@/types'
-import { BACKGROUND_OPTIONS } from '@/utils/fonts'
+import { BACKGROUND_OPTIONS, type BackgroundOption } from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
 import CapsuleSlider from '@/components/CapsuleSlider.vue'
 
@@ -24,17 +24,26 @@ const backgrounds = BACKGROUND_OPTIONS
  * the range rather than the 80 the old placeholder showed.
  */
 const brightness = computed(() => (s.value.brightness < 0 ? 100 : s.value.brightness))
+
+/* ---- 模板事件 ---- */
+function handleBrightnessInput(v: number): void {
+  void store.update({ brightness: v })
+}
+
+function handlePickTheme(t: { id: ThemeId }): void {
+  void store.update({ theme: t.id })
+}
+
+function handlePickBackground(b: BackgroundOption): void {
+  void store.update({ background: b.id })
+}
 </script>
 
 <template>
   <div class="theme-panel" @click.stop>
     <!-- Brightness: sun at the low end, the value carried by the thumb. -->
     <div class="tp-row">
-      <CapsuleSlider
-        :min="20" :max="100" :step="1"
-        :value="brightness"
-        @update:value="(v: number) => store.update({ brightness: v })"
-      >
+      <CapsuleSlider :min="20" :max="100" :step="1" :value="brightness" @update:value="handleBrightnessInput">
         <template #min>
           <Icon name="brightness" :size="15" :width="1.8" class="tp-sun" />
         </template>
@@ -50,7 +59,7 @@ const brightness = computed(() => (s.value.brightness < 0 ? 100 : s.value.bright
         :class="{ active: s.theme === t.id }"
         :style="{ background: t.color, borderColor: s.theme === t.id ? 'var(--accent)' : 'var(--divider)' }"
         :aria-label="t.id === 'black' ? '夜间' : t.id"
-        @click="store.update({ theme: t.id })"
+        @click="handlePickTheme(t)"
       >
         <Icon v-if="t.dark" name="moon" :size="14" class="tp-theme__moon" />
       </button>
@@ -66,7 +75,7 @@ const brightness = computed(() => (s.value.brightness < 0 ? 100 : s.value.bright
         :style="b.css ? { backgroundImage: b.css } : {}"
         :title="b.label"
         :aria-label="b.label"
-        @click="store.update({ background: b.id })"
+        @click="handlePickBackground(b)"
       />
     </div>
   </div>
@@ -75,16 +84,24 @@ const brightness = computed(() => (s.value.brightness < 0 ? 100 : s.value.bright
 <style scoped>
 .theme-panel {
   position: absolute;
-  left: 0; right: 0; bottom: calc(52px + var(--safe-bottom));
+  left: 0;
+  right: 0;
+  bottom: calc(52px + var(--safe-bottom));
   z-index: 55;
   padding: 18px;
   background: var(--bg-panel);
   border-top: 1px solid var(--divider);
-  animation: panelUp .18s ease;
+  animation: panelUp 0.18s ease;
 }
 @keyframes panelUp {
-  from { transform: translateY(12px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* The brightness capsule is taller than the panel's other controls. */
@@ -138,7 +155,9 @@ const brightness = computed(() => (s.value.brightness < 0 ? 100 : s.value.bright
   border: 2px solid var(--divider);
   background: var(--bg-secondary);
 }
-.tp-bg.active { border-color: var(--accent); }
+.tp-bg.active {
+  border-color: var(--accent);
+}
 
 /* Moon glyph on the dark theme chip: accent blue, as in WeRead. */
 .tp-theme__moon {

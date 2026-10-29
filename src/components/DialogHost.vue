@@ -20,7 +20,7 @@ function onKeydown(e: KeyboardEvent) {
 
 watch(
   () => dialogState.open,
-  (open) => {
+  open => {
     if (open) {
       previousOverlay = { name: uiState.overlay, close: uiState.closeOverlay }
       openOverlay(OVERLAY_ID, () => resolveDialog(false))
@@ -33,35 +33,44 @@ watch(
       }
       previousOverlay = null
     }
-  }
+  },
 )
 
 onBeforeUnmount(() => {
   if (dialogState.open) closeOverlay(OVERLAY_ID)
   window.removeEventListener('keydown', onKeydown)
 })
+
+/* ---- 模板事件 ---- */
+function handleCancel(): void {
+  resolveDialog(false)
+}
+
+function handleConfirm(): void {
+  resolveDialog(true)
+}
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="dialog">
-      <div v-if="dialogState.open" class="dialog-mask" @click.self="resolveDialog(false)">
+      <div v-if="dialogState.open" class="dialog-mask" @click.self="handleCancel">
         <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="dialogState.title || '提示'">
           <div class="dialog-body">
             <p v-if="dialogState.title" class="dialog-title">{{ dialogState.title }}</p>
             <p class="dialog-message">{{ dialogState.message }}</p>
           </div>
           <div class="dialog-actions" :class="{ 'dialog-actions--single': dialogState.alert }">
-            <button
-              v-if="!dialogState.alert"
-              class="dialog-btn"
-              @click="resolveDialog(false)"
-            >{{ dialogState.cancelText }}</button>
+            <button v-if="!dialogState.alert" class="dialog-btn" @click="handleCancel">
+              {{ dialogState.cancelText }}
+            </button>
             <button
               class="dialog-btn dialog-btn--primary"
               :class="{ 'dialog-btn--danger': dialogState.danger }"
-              @click="resolveDialog(true)"
-            >{{ dialogState.confirmText }}</button>
+              @click="handleConfirm"
+            >
+              {{ dialogState.confirmText }}
+            </button>
           </div>
         </div>
       </div>

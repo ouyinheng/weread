@@ -52,10 +52,13 @@ function savePos(): void {
   const maxX = window.innerWidth - size.w
   const maxY = window.innerHeight - size.h
   try {
-    localStorage.setItem(POS_KEY, JSON.stringify({
-      xr: maxX > 0 ? x.value / maxX : 0,
-      yr: maxY > 0 ? y.value / maxY : 0,
-    }))
+    localStorage.setItem(
+      POS_KEY,
+      JSON.stringify({
+        xr: maxX > 0 ? x.value / maxX : 0,
+        yr: maxY > 0 ? y.value / maxY : 0,
+      }),
+    )
   } catch {
     // 位置记忆失败不影响播放。
   }
@@ -87,8 +90,16 @@ function place(): void {
 
   const saved = readPos()
   if (saved) {
-    x.value = clamp(saved.xr * Math.max(0, window.innerWidth - size.w), EDGE, window.innerWidth - size.w - EDGE)
-    y.value = clamp(saved.yr * Math.max(0, window.innerHeight - size.h), TOP_MIN, window.innerHeight - size.h - EDGE)
+    x.value = clamp(
+      saved.xr * Math.max(0, window.innerWidth - size.w),
+      EDGE,
+      window.innerWidth - size.w - EDGE,
+    )
+    y.value = clamp(
+      saved.yr * Math.max(0, window.innerHeight - size.h),
+      TOP_MIN,
+      window.innerHeight - size.h - EDGE,
+    )
   } else {
     // 默认悬浮在右下、离底部留出一段距离，不压住正文末行。
     const gap = Math.max(96, Math.round(window.innerHeight * 0.16))
@@ -136,7 +147,7 @@ function onPointerUp(e: PointerEvent): void {
   dragId = null
   moved = false
   try {
-    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+    ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
   } catch {
     // 指针已经失效时忽略。
   }
@@ -147,7 +158,9 @@ function onPointerUp(e: PointerEvent): void {
   if (wasMoved) savePos()
   else emit('expand')
   // 兜底复位，别把下一次点击吃掉。
-  window.setTimeout(() => { suppressClick = false }, 350)
+  window.setTimeout(() => {
+    suppressClick = false
+  }, 350)
 }
 
 function onPointerCancel(e: PointerEvent): void {
@@ -155,7 +168,9 @@ function onPointerCancel(e: PointerEvent): void {
   dragId = null
   moved = false
   suppressClick = true
-  window.setTimeout(() => { suppressClick = false }, 350)
+  window.setTimeout(() => {
+    suppressClick = false
+  }, 350)
 }
 
 function onBodyClick(): void {
@@ -168,6 +183,15 @@ function onBodyClick(): void {
 
 function onCoverError(e: Event): void {
   ;(e.target as HTMLImageElement).style.display = 'none'
+}
+
+/* ---- 模板事件 ---- */
+function handleToggle(): void {
+  emit('toggle')
+}
+
+function handleClose(): void {
+  emit('close')
 }
 </script>
 
@@ -198,12 +222,12 @@ function onCoverError(e: Event): void {
       class="mini__btn"
       :aria-label="buffering ? '取消准备' : playing ? '暂停' : '播放'"
       :disabled="unavailable"
-      @click="emit('toggle')"
+      @click="handleToggle"
     >
       <span v-if="buffering" class="mini__spinner" aria-hidden="true" />
       <MorphIcon v-else :name="playing ? 'pause' : 'play'" :size="18" :width="1.9" />
     </button>
-    <button class="mini__btn" aria-label="退出听书" @click="emit('close')">
+    <button class="mini__btn" aria-label="退出听书" @click="handleClose">
       <Icon name="close" :size="16" :width="1.9" />
     </button>
   </div>
@@ -315,11 +339,15 @@ function onCoverError(e: Event): void {
 }
 
 @keyframes miniSpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mini__spinner { animation-duration: 2s; }
+  .mini__spinner {
+    animation-duration: 2s;
+  }
 }
 
 .mini__btn:disabled {

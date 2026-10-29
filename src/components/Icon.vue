@@ -21,7 +21,7 @@ withDefaults(
     /** Stroke width; 1.7 is the app default. */
     width?: number
   }>(),
-  { size: 22, width: 1.7 }
+  { size: 22, width: 1.7 },
 )
 </script>
 
@@ -86,7 +86,10 @@ withDefaults(
       <path d="M8.7 15.3l3.1-3.1" />
     </template>
     <!-- Bookmark: used where the action really is "save this position". -->
-    <path v-else-if="name === 'bookmark'" d="M5.8 4.2h12.4a.8.8 0 01.8.8v15.4l-7-4.2-7 4.2V5a.8.8 0 01.8-.8z" />
+    <path
+      v-else-if="name === 'bookmark'"
+      d="M5.8 4.2h12.4a.8.8 0 01.8.8v15.4l-7-4.2-7 4.2V5a.8.8 0 01.8-.8z"
+    />
     <!--
       进度 (reader bottom bar): WeRead's glyph is a knob on a track — a ring
       with a short dash either side, reading as "-O-".
@@ -100,13 +103,17 @@ withDefaults(
     <!-- 亮度: sun with eight rays -->
     <template v-else-if="name === 'brightness'">
       <circle cx="12" cy="12" r="3.7" />
-      <path d="M12 2.9v2.2M12 18.9v2.2M2.9 12h2.2M18.9 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6" />
+      <path
+        d="M12 2.9v2.2M12 18.9v2.2M2.9 12h2.2M18.9 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6"
+      />
     </template>
     <!-- 字体: serif A -->
     <path v-else-if="name === 'font'" d="M5.2 19.2L11.5 5.4h1L18.8 19.2M8 14.2h7.9" />
     <!-- 书架/阅读 tab: open book -->
     <template v-else-if="name === 'book-open'">
-      <path d="M12 6.6C10.2 5.2 7.6 4.6 4.4 4.8v12.6c3.2-.2 5.8.4 7.6 1.8 1.8-1.4 4.4-2 7.6-1.8V4.8c-3.2-.2-5.8.4-7.6 1.8z" />
+      <path
+        d="M12 6.6C10.2 5.2 7.6 4.6 4.4 4.8v12.6c3.2-.2 5.8.4 7.6 1.8 1.8-1.4 4.4-2 7.6-1.8V4.8c-3.2-.2-5.8.4-7.6 1.8z"
+      />
       <path d="M12 6.6v12.6" />
     </template>
     <!-- 书架 tab (alternative: closed books) -->
@@ -124,10 +131,17 @@ withDefaults(
     <!-- 设置 gear -->
     <template v-else-if="name === 'gear'">
       <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 14.8a1.6 1.6 0 00.3 1.8l.1.1a1.9 1.9 0 11-2.7 2.7l-.1-.1a1.6 1.6 0 00-1.8-.3 1.6 1.6 0 00-1 1.5v.2a1.9 1.9 0 11-3.8 0v-.1a1.6 1.6 0 00-1-1.5 1.6 1.6 0 00-1.8.3l-.1.1a1.9 1.9 0 11-2.7-2.7l.1-.1a1.6 1.6 0 00.3-1.8 1.6 1.6 0 00-1.5-1h-.2a1.9 1.9 0 110-3.8h.1a1.6 1.6 0 001.5-1 1.6 1.6 0 00-.3-1.8l-.1-.1a1.9 1.9 0 112.7-2.7l.1.1a1.6 1.6 0 001.8.3h.1a1.6 1.6 0 001-1.5v-.2a1.9 1.9 0 113.8 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a1.9 1.9 0 112.7 2.7l-.1.1a1.6 1.6 0 00-.3 1.8v.1a1.6 1.6 0 001.5 1h.2a1.9 1.9 0 110 3.8h-.1a1.6 1.6 0 00-1.5 1z" />
+      <path
+        d="M19.4 14.8a1.6 1.6 0 00.3 1.8l.1.1a1.9 1.9 0 11-2.7 2.7l-.1-.1a1.6 1.6 0 00-1.8-.3 1.6 1.6 0 00-1 1.5v.2a1.9 1.9 0 11-3.8 0v-.1a1.6 1.6 0 00-1-1.5 1.6 1.6 0 00-1.8.3l-.1.1a1.9 1.9 0 11-2.7-2.7l.1-.1a1.6 1.6 0 00.3-1.8 1.6 1.6 0 00-1.5-1h-.2a1.9 1.9 0 110-3.8h.1a1.6 1.6 0 001.5-1 1.6 1.6 0 00-.3-1.8l-.1-.1a1.9 1.9 0 112.7-2.7l.1.1a1.6 1.6 0 001.8.3h.1a1.6 1.6 0 001-1.5v-.2a1.9 1.9 0 113.8 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a1.9 1.9 0 112.7 2.7l-.1.1a1.6 1.6 0 00-.3 1.8v.1a1.6 1.6 0 001.5 1h.2a1.9 1.9 0 110 3.8h-.1a1.6 1.6 0 00-1.5 1z"
+      />
     </template>
     <!-- 夜间模式 moon (filled, used inside the dark theme chip) -->
-    <path v-else-if="name === 'moon'" d="M20.4 12.9A8.6 8.6 0 1111.1 3.6a6.7 6.7 0 009.3 9.3z" fill="currentColor" stroke="none" />
+    <path
+      v-else-if="name === 'moon'"
+      d="M20.4 12.9A8.6 8.6 0 1111.1 3.6a6.7 6.7 0 009.3 9.3z"
+      fill="currentColor"
+      stroke="none"
+    />
     <template v-else-if="name === 'download'">
       <path d="M12 3.8v11.4M8.2 11.4L12 15.2l3.8-3.8" />
       <path d="M4.6 17v2.2a1.4 1.4 0 001.4 1.4h12a1.4 1.4 0 001.4-1.4V17" />
@@ -142,7 +156,9 @@ withDefaults(
       <path d="M17.6 14.2v5M15.1 16.7h5" />
     </template>
     <template v-else-if="name === 'message'">
-      <path d="M20.4 11.6c0 4-3.8 7.2-8.4 7.2-1 0-2-.2-2.9-.5l-4.5 1.3 1.3-3.9a6.6 6.6 0 01-1.3-4.1c0-4 3.8-7.2 8.4-7.2s7.4 3.2 7.4 7.2z" />
+      <path
+        d="M20.4 11.6c0 4-3.8 7.2-8.4 7.2-1 0-2-.2-2.9-.5l-4.5 1.3 1.3-3.9a6.6 6.6 0 01-1.3-4.1c0-4 3.8-7.2 8.4-7.2s7.4 3.2 7.4 7.2z"
+      />
     </template>
     <!-- 收藏（影视播放页）：心形，和参考图的操作行一致 -->
     <path
@@ -168,7 +184,10 @@ withDefaults(
       <rect x="3.4" y="6" width="17.2" height="12" rx="2.4" />
       <path d="M7.2 11.4h4.2M13.6 11.4h3.2M7.2 14.6h8.4" />
     </template>
-    <path v-else-if="name === 'sort-down'" d="M7 4.6v14.8M3.8 16l3.2 3.4 3.2-3.4M14 5.4h6.2M14 10.4h4.6M14 15.4h3" />
+    <path
+      v-else-if="name === 'sort-down'"
+      d="M7 4.6v14.8M3.8 16l3.2 3.4 3.2-3.4M14 5.4h6.2M14 10.4h4.6M14 15.4h3"
+    />
     <!-- 播放锁: padlock -->
     <template v-else-if="name === 'lock'">
       <rect x="5" y="10.6" width="14" height="9.4" rx="2.2" />
@@ -201,8 +220,16 @@ withDefaults(
     -->
     <template v-else-if="name === 'tab-read'">
       <!-- Open book: two curved pages meeting at a V-shaped spine. -->
-      <path d="M12 5.6C9.4 4.3 6.3 4.1 3.6 5.2v12.4c2.7-1.1 5.8-.9 8.4.4z" fill="currentColor" stroke="none" />
-      <path d="M12 5.6c2.6-1.3 5.7-1.5 8.4-.4v12.4c-2.7-1.1-5.8-.9-8.4.4z" fill="currentColor" stroke="none" />
+      <path
+        d="M12 5.6C9.4 4.3 6.3 4.1 3.6 5.2v12.4c2.7-1.1 5.8-.9 8.4.4z"
+        fill="currentColor"
+        stroke="none"
+      />
+      <path
+        d="M12 5.6c2.6-1.3 5.7-1.5 8.4-.4v12.4c-2.7-1.1-5.8-.9-8.4.4z"
+        fill="currentColor"
+        stroke="none"
+      />
     </template>
     <template v-else-if="name === 'tab-shelf'">
       <!-- Books standing on a shelf. Earlier versions stacked two rounded bars,
@@ -218,7 +245,11 @@ withDefaults(
     <template v-else-if="name === 'tab-tv'">
       <!-- Screen with a play cut-out; the knock-out uses the bar colour so the
            glyph reads on both the white and black tab bars. -->
-      <path d="M4.6 4.4h14.8a2.2 2.2 0 012.2 2.2v10.8a2.2 2.2 0 01-2.2 2.2H4.6a2.2 2.2 0 01-2.2-2.2V6.6a2.2 2.2 0 012.2-2.2z" fill="currentColor" stroke="none" />
+      <path
+        d="M4.6 4.4h14.8a2.2 2.2 0 012.2 2.2v10.8a2.2 2.2 0 01-2.2 2.2H4.6a2.2 2.2 0 01-2.2-2.2V6.6a2.2 2.2 0 012.2-2.2z"
+        fill="currentColor"
+        stroke="none"
+      />
       <path d="M10.2 8.6l5.1 3.4-5.1 3.4z" fill="var(--bottom-bar-bg)" stroke="none" />
     </template>
     <!-- Outline screen + play: the filled tab glyph turns into a solid grey
@@ -239,7 +270,9 @@ withDefaults(
     />
 
     <template v-else-if="name === 'import'">
-      <path d="M3.4 7.4A1.6 1.6 0 015 5.8h4l2 2.1h8a1.6 1.6 0 011.6 1.6v9.1A1.6 1.6 0 0119 20.2H5a1.6 1.6 0 01-1.6-1.6z" />
+      <path
+        d="M3.4 7.4A1.6 1.6 0 015 5.8h4l2 2.1h8a1.6 1.6 0 011.6 1.6v9.1A1.6 1.6 0 0119 20.2H5a1.6 1.6 0 01-1.6-1.6z"
+      />
     </template>
   </svg>
 </template>

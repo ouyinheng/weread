@@ -26,7 +26,7 @@ const tabs = computed(() =>
   visibleTabs({
     showShelfTab: appSettings.app.showShelfTab,
     showTvTab: appSettings.app.showTvTab,
-  })
+  }),
 )
 const activeName = computed(() => String(route.name || ''))
 
@@ -44,6 +44,11 @@ function go(name: string) {
   tapFeedback()
   router.replace({ name })
 }
+
+/* ---- 模板事件 ---- */
+function handleSelectTab(tab: { name: string }): void {
+  go(tab.name)
+}
 </script>
 
 <template>
@@ -55,7 +60,7 @@ function go(name: string) {
       :class="{ 'tabbar__item--active': isActive(tab.name) }"
       role="tab"
       :aria-selected="isActive(tab.name)"
-      @click="go(tab.name)"
+      @click="handleSelectTab(tab)"
     >
       <span class="tabbar__icon">
         <TabIcon :name="tab.name" :active="isActive(tab.name)" />

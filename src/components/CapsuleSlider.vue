@@ -27,7 +27,7 @@ const props = withDefaults(
      */
     travelInset?: number
   }>(),
-  { step: 1, travelInset: 0 }
+  { step: 1, travelInset: 0 },
 )
 
 const emit = defineEmits<{
@@ -124,9 +124,15 @@ function onChange(e: Event) {
   pointer-events: none;
   z-index: 2;
 }
-.capsule__end--min { left: 13px; }
-.capsule__end--max { right: 13px; }
-.capsule__end:empty { display: none; }
+.capsule__end--min {
+  left: 13px;
+}
+.capsule__end--max {
+  right: 13px;
+}
+.capsule__end:empty {
+  display: none;
+}
 /* Interactive end slots (chapter-step buttons) opt back into hit testing. */
 .capsule__end :deep(button) {
   pointer-events: auto;

@@ -39,22 +39,24 @@ const health = ref<Record<string, boolean>>({})
 const checking = ref(false)
 const progress = ref({ done: 0, total: 0 })
 
-onMounted(() => { void store.load() })
+onMounted(() => {
+  void store.load()
+})
 
 const filtered = computed(() => {
   const q = filter.value.trim().toLowerCase()
   const list = store.sources
   if (!q) return list
-  return list.filter(
-    (s) => s.name.toLowerCase().includes(q) || s.api.toLowerCase().includes(q)
-  )
+  return list.filter(s => s.name.toLowerCase().includes(q) || s.api.toLowerCase().includes(q))
 })
 
-const dead = computed(() => store.sources.filter((s) => health.value[s.id] === false))
+const dead = computed(() => store.sources.filter(s => health.value[s.id] === false))
 
 function flash(message: string): void {
   notice.value = message
-  window.setTimeout(() => { if (notice.value === message) notice.value = '' }, 2500)
+  window.setTimeout(() => {
+    if (notice.value === message) notice.value = ''
+  }, 2500)
 }
 
 /** 复用书源的体检配色：0 未检测 / 1 可用 / 3 失效，两个页面的点颜色必须一致。 */
@@ -106,9 +108,9 @@ function purgeDead(): Promise<void> {
     message: `删除测活失败的 ${list.length} 个源？它们的观看记录也会一并清掉。`,
     confirmText: '删除',
     danger: true,
-  }).then((ok) => {
+  }).then(ok => {
     if (!ok) return
-    list.forEach((s) => store.removeSource(s.id))
+    list.forEach(s => store.removeSource(s.id))
     flash(`已清除 ${list.length} 个`)
   })
 }
@@ -138,9 +140,47 @@ function remove(source: TvSource): Promise<void> {
     message: `删除「${source.name}」？该源的观看记录也会一并清掉。`,
     confirmText: '删除',
     danger: true,
-  }).then((ok) => {
+  }).then(ok => {
     if (ok) store.removeSource(source.id)
   })
+}
+
+/**
+ * 把代码托管平台的「网页地址」换成能跨域拿到的内容地址。
+ *
+ * 背景：gitee 的 raw 链接（含 302 之后的 giteeusercontent）响应里**没有任何
+ * Access-Control-Allow-Origin**，WebView 里 fetch 必被 CORS 拦（控制台表现为 403）。
+ * 只有 api/v5 的 contents 接口带 `Access-Control-Allow-Origin: *`，代价是内容包在
+ * base64 里，需要解开。
+ *
+ * GitHub 的 blob 页面同理走不通，换成 raw.githubusercontent（带 `*`，可直接读）。
+ * 其他地址原样返回，调用方照旧 fetch。
+ */
+function contentUrl(raw: string): { url: string; base64: boolean } {
+  const clean = raw.trim().replace(/[?#].*$/, '')
+  const gitee = clean.match(/^https?:\/\/gitee\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/([^/]+)\/(.+)$/i)
+  if (gitee) {
+    const [, owner, repo, ref, path] = gitee
+    return {
+      url: `https://gitee.com/api/v5/repos/${owner}/${repo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(ref)}`,
+      base64: true,
+    }
+  }
+  const github = clean.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/([^/]+)\/(.+)$/i)
+  if (github) {
+    const [, owner, repo, ref, path] = github
+    return {
+      url: `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${path}`,
+      base64: false,
+    }
+  }
+  return { url: raw.trim(), base64: false }
+}
+
+/** gitee 接口把文件内容包成 base64；中文要按 UTF-8 解，直接 atob 出来是乱码。 */
+function decodeBase64Text(b64: string): string {
+  const bin = atob(b64.replace(/\s+/g, ''))
+  return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)))
 }
 
 /**
@@ -182,9 +222,18 @@ async function doImport(): Promise<void> {
         flash('先填源列表链接')
         return
       }
-      const res = await fetch(url, { redirect: 'follow' })
+      const target = contentUrl(url)
+      const res = await fetch(target.url, { redirect: 'follow' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       text = await res.text()
+      if (target.base64) {
+        // 接口返回 { encoding: 'base64', content: '...' }；失败时是 { message }
+        const payload = JSON.parse(text) as { encoding?: string; content?: string; message?: string }
+        if (payload.encoding !== 'base64' || typeof payload.content !== 'string') {
+          throw new Error(payload.message || '接口没返回文件内容')
+        }
+        text = decodeBase64Text(payload.content)
+      }
     }
     if (!text.trim()) {
       flash(tab.value === 'url' ? '先填源列表链接' : '先粘贴 JSON 或选一个文件')
@@ -212,16 +261,41 @@ async function doImport(): Promise<void> {
     importBusy.value = false
   }
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handleOpenSheet(): void {
+  sheet.value = true
+}
+
+function handleCloseSheet(): void {
+  sheet.value = false
+}
+
+function handleToggleSource(s: TvSource): void {
+  void store.toggleSource(s.id)
+}
+
+function handleUseUrlTab(): void {
+  tab.value = 'url'
+}
+
+function handleUsePasteTab(): void {
+  tab.value = 'paste'
+}
 </script>
 
 <template>
   <div class="src-page tv-src-page">
     <header class="src-header">
-      <button class="src-back tap-target" aria-label="返回" @click="router.back()">
+      <button class="src-back tap-target" aria-label="返回" @click="handleBack">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="src-title">视频源管理</span>
-      <button class="src-header-action tap-target" @click="sheet = true">导入</button>
+      <button class="src-header-action tap-target" @click="handleOpenSheet">导入</button>
     </header>
 
     <main class="src-body">
@@ -265,7 +339,7 @@ async function doImport(): Promise<void> {
             role="switch"
             :aria-checked="s.enabled"
             :aria-label="`启用 ${s.name}`"
-            @click="store.toggleSource(s.id)"
+            @click="handleToggleSource(s)"
           >
             <span class="toggle__dot" />
           </button>
@@ -276,16 +350,18 @@ async function doImport(): Promise<void> {
       </div>
 
       <div v-if="!filtered.length" class="src-empty">
-        {{ filter ? '没有匹配的视频源。' : '还没有视频源。点右上角「导入」，粘贴 JSON、填源列表链接或选文件。' }}
+        {{
+          filter ? '没有匹配的视频源。' : '还没有视频源。点右上角「导入」，粘贴 JSON、填源列表链接或选文件。'
+        }}
       </div>
     </main>
 
     <!-- 导入面板：和书源管理同一套（链接 / 粘贴 / 文件），只是内容换成视频源 -->
-    <div v-if="sheet" class="src-mask" @click.self="sheet = false">
+    <div v-if="sheet" class="src-mask" @click.self="handleCloseSheet">
       <div class="src-sheet">
         <div class="src-sheet__head">
           <span class="src-sheet__title">导入视频源</span>
-          <button class="src-sheet__close" aria-label="关闭" @click="sheet = false">
+          <button class="src-sheet__close" aria-label="关闭" @click="handleCloseSheet">
             <Icon name="close" :size="18" :width="2" />
           </button>
         </div>
@@ -294,14 +370,14 @@ async function doImport(): Promise<void> {
           <button
             class="src-sheet__tab"
             :class="{ 'src-sheet__tab--on': tab === 'url' }"
-            @click="tab = 'url'"
+            @click="handleUseUrlTab"
           >
             链接导入
           </button>
           <button
             class="src-sheet__tab"
             :class="{ 'src-sheet__tab--on': tab === 'paste' }"
-            @click="tab = 'paste'"
+            @click="handleUsePasteTab"
           >
             粘贴 JSON
           </button>
@@ -318,15 +394,16 @@ async function doImport(): Promise<void> {
             inputmode="url"
           />
           <p class="src-sheet__hint">
-            填一份源列表的直链：LibreTV 导出的 <code>customAPIs</code>、TVBox 的
-            <code>sites</code>，或 <code>[{ "name": …, "url": … }]</code> 数组都认。
+            填一份源列表的直链：LibreTV 导出的 <code>customAPIs</code>、TVBox 的 <code>sites</code>，或
+            <code>[{ "name": …, "url": … }]</code> 数组都认。 Gitee / GitHub
+            的仓库页面地址直接贴就行，会自动换成能跨域读取的接口。
           </p>
         </template>
 
         <template v-else>
           <p class="src-sheet__hint">
-            支持 LibreTV 导出的 <code>{ "customAPIs": […] }</code>、TVBox 的
-            <code>{ "sites": […] }</code>，或 <code>[{ "name": …, "url": … }]</code> 数组。
+            支持 LibreTV 导出的 <code>{ "customAPIs": […] }</code>、TVBox 的 <code>{ "sites": […] }</code>，或
+            <code>[{ "name": …, "url": … }]</code> 数组。
           </p>
 
           <button class="src-sheet__file" @click="pickFile">
@@ -352,7 +429,7 @@ async function doImport(): Promise<void> {
         <p v-if="notice" class="src-sheet__error">{{ notice }}</p>
 
         <div class="src-sheet__actions">
-          <button class="src-sheet__btn" @click="sheet = false">取消</button>
+          <button class="src-sheet__btn" @click="handleCloseSheet">取消</button>
           <button class="src-sheet__btn src-sheet__btn--primary" :disabled="importBusy" @click="doImport">
             {{ importBusy ? '导入中…' : '导入' }}
           </button>

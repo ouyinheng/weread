@@ -26,28 +26,49 @@ const emit = defineEmits<{
   notes: []
   search: []
 }>()
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  emit('back')
+}
+
+function handleSearch(): void {
+  emit('search')
+}
+
+function handleNotes(): void {
+  emit('notes')
+}
+
+function handleShare(): void {
+  emit('share')
+}
+
+function handleMore(): void {
+  emit('more')
+}
 </script>
 
 <template>
   <div class="topbar" @click.stop>
-    <button class="topbar__btn" @click="emit('back')" aria-label="返回">
+    <button class="topbar__btn" @click="handleBack" aria-label="返回">
       <Icon name="back" :size="24" :width="1.9" />
     </button>
 
     <div class="topbar__actions">
       <!-- 书内搜索：找正文里的一句话，而不只是章节名。 -->
-      <button class="topbar__action" @click="emit('search')" aria-label="搜索本书">
+      <button class="topbar__action" @click="handleSearch" aria-label="搜索本书">
         <Icon name="search" :size="21" :width="1.9" />
       </button>
       <!-- 想法: person glyph with the count set beside its shoulder. -->
-      <button class="topbar__action" @click="emit('notes')" aria-label="想法">
+      <button class="topbar__action" @click="handleNotes" aria-label="想法">
         <Icon name="person" :size="21" :width="1.8" />
         <span v-if="noteCount" class="topbar__count">{{ noteCount > 99 ? '99+' : noteCount }}</span>
       </button>
-      <button class="topbar__action" @click="emit('share')" aria-label="分享">
+      <button class="topbar__action" @click="handleShare" aria-label="分享">
         <Icon name="share" :size="21" />
       </button>
-      <button class="topbar__action" @click="emit('more')" aria-label="更多">
+      <button class="topbar__action" @click="handleMore" aria-label="更多">
         <Icon name="more" :size="21" :width="1.9" />
       </button>
     </div>
@@ -72,8 +93,12 @@ const emit = defineEmits<{
 }
 
 @keyframes dropDown {
-  from { transform: translateY(-100%); }
-  to { transform: translateY(0); }
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }
 
 .topbar__btn {

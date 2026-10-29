@@ -196,6 +196,15 @@ function openItem(item: TvItem) {
 function metaOf(item: TvItem): string {
   return [item.year, item.area].filter(Boolean).join(' · ') || item.typeName || ''
 }
+
+/* ---- 模板事件 ---- */
+function handlePickCategory(cat: string): void {
+  activeCat.value = cat
+}
+
+function handleRetry(): void {
+  void reload()
+}
 </script>
 
 <template>
@@ -267,7 +276,7 @@ function metaOf(item: TvItem): string {
             :key="c"
             class="tv-chip"
             :class="{ 'tv-chip--on': activeCat === c }"
-            @click="activeCat = c"
+            @click="handlePickCategory(c)"
           >
             {{ c }}
           </button>
@@ -302,7 +311,7 @@ function metaOf(item: TvItem): string {
           <span v-for="n in 6" :key="n" class="tv-skeleton" />
         </div>
 
-        <p v-else-if="error" class="tv__rail-error" @click="reload()">{{ error }}，点此重试</p>
+        <p v-else-if="error" class="tv__rail-error" @click="handleRetry">{{ error }}，点此重试</p>
       </template>
     </main>
   </div>
@@ -421,11 +430,15 @@ function metaOf(item: TvItem): string {
 }
 
 @keyframes tv-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tv__pull-spin--on { animation-duration: 2s; }
+  .tv__pull-spin--on {
+    animation-duration: 2s;
+  }
 }
 
 .tv__empty {

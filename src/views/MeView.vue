@@ -20,7 +20,6 @@ const bookmarkStore = useBookmarkStore()
 const sourceStore = useSourceStore()
 const tvStore = useTvStore()
 
-
 const totalMs = ref(0)
 const storageText = ref('—')
 const quotaText = ref('')
@@ -50,10 +49,38 @@ interface StatItem {
  * Empty states use WeRead's own wording instead of a bare zero.
  */
 const stats = computed<StatItem[]>(() => [
-  { icon: 'book-open', label: '在读', value: `${reading.value} 本`, muted: reading.value === 0, color: 'var(--stat-reading)', soft: 'var(--stat-reading-soft)' },
-  { icon: 'check-circle', label: '读完', value: `${finished.value} 本`, muted: finished.value === 0, color: 'var(--stat-finished)', soft: 'var(--stat-finished-soft)' },
-  { icon: 'note', label: '笔记', value: `${noteCount.value} 个`, muted: noteCount.value === 0, color: 'var(--stat-note)', soft: 'var(--stat-note-soft)' },
-  { icon: 'bookmark', label: '书签', value: `${bookmarks.value} 个`, muted: bookmarks.value === 0, color: 'var(--stat-bookmark)', soft: 'var(--stat-bookmark-soft)' },
+  {
+    icon: 'book-open',
+    label: '在读',
+    value: `${reading.value} 本`,
+    muted: reading.value === 0,
+    color: 'var(--stat-reading)',
+    soft: 'var(--stat-reading-soft)',
+  },
+  {
+    icon: 'check-circle',
+    label: '读完',
+    value: `${finished.value} 本`,
+    muted: finished.value === 0,
+    color: 'var(--stat-finished)',
+    soft: 'var(--stat-finished-soft)',
+  },
+  {
+    icon: 'note',
+    label: '笔记',
+    value: `${noteCount.value} 个`,
+    muted: noteCount.value === 0,
+    color: 'var(--stat-note)',
+    soft: 'var(--stat-note-soft)',
+  },
+  {
+    icon: 'bookmark',
+    label: '书签',
+    value: `${bookmarks.value} 个`,
+    muted: bookmarks.value === 0,
+    color: 'var(--stat-bookmark)',
+    soft: 'var(--stat-bookmark-soft)',
+  },
 ])
 
 /**
@@ -132,6 +159,23 @@ onActivated(() => {
   }
   void refresh()
 })
+
+/* ---- 模板事件 ---- */
+function handleOpenTvHistory(): void {
+  void router.push({ name: 'tvHistory' })
+}
+
+function handleOpenSourceList(): void {
+  void router.push({ name: 'sourceList' })
+}
+
+function handleOpenTvSources(): void {
+  void router.push({ name: 'tvSources' })
+}
+
+function handleOpenSettings(): void {
+  void router.push({ name: 'settings' })
+}
 </script>
 
 <template>
@@ -154,16 +198,14 @@ onActivated(() => {
           </span>
           <span class="me__stat-text">
             <span class="me__stat-label">{{ s.label }}</span>
-            <span class="me__stat-value" :class="{ 'me__stat-value--muted': s.muted }">{{
-              s.value
-            }}</span>
+            <span class="me__stat-value" :class="{ 'me__stat-value--muted': s.muted }">{{ s.value }}</span>
           </span>
         </div>
       </div>
 
       <!-- 观看记录只留入口，列表和删除在二级页：这页本来就是「看一眼就走」的。 -->
       <div class="me__card me__rows">
-        <button class="me__row me__row--link" @click="router.push({ name: 'tvHistory' })">
+        <button class="me__row me__row--link" @click="handleOpenTvHistory">
           <span class="me__row-label">观看记录</span>
           <span class="me__row-value">{{ tvStore.history.length }} 条</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
@@ -185,12 +227,12 @@ onActivated(() => {
             {{ storageText }}<template v-if="quotaText"> / {{ quotaText }}</template>
           </span>
         </div>
-        <button class="me__row me__row--link" @click="router.push({ name: 'sourceList' })">
+        <button class="me__row me__row--link" @click="handleOpenSourceList">
           <span class="me__row-label">书源管理</span>
           <span class="me__row-value">{{ sourceStore.sources.length }} 个</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
-        <button class="me__row me__row--link" @click="router.push({ name: 'tvSources' })">
+        <button class="me__row me__row--link" @click="handleOpenTvSources">
           <span class="me__row-label">视频源管理</span>
           <span class="me__row-value">{{ tvStore.sources.length }} 个</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
@@ -199,7 +241,7 @@ onActivated(() => {
 
       <!-- 设置放在最后：前面是「看我的数据 / 管我的源」，设置是低频的收尾动作。 -->
       <div class="me__card me__rows">
-        <button class="me__row me__row--link" @click="router.push({ name: 'settings' })">
+        <button class="me__row me__row--link" @click="handleOpenSettings">
           <span class="me__row-label">设置</span>
           <Icon name="chevron-right" :size="17" :width="2" class="me__row-chevron" />
         </button>
@@ -409,5 +451,4 @@ onActivated(() => {
   line-height: 1.6;
   color: #c0392b;
 }
-
 </style>

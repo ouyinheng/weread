@@ -16,7 +16,7 @@
 import { computed, ref } from 'vue'
 import { useSettingsStore } from '@/stores'
 import type { TurnPageType } from '@/types'
-import { FONT_GROUPS, FONT_OPTIONS, fontLabelOf, type FontGroup } from '@/utils/fonts'
+import { FONT_GROUPS, FONT_OPTIONS, fontLabelOf, type FontGroup, type FontOption } from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
 import CapsuleSlider from '@/components/CapsuleSlider.vue'
 
@@ -74,17 +74,84 @@ const fontTabs = computed(() => {
 })
 
 const shownFonts = computed(() =>
-  fontTab.value === 'all'
-    ? FONT_OPTIONS
-    : FONT_OPTIONS.filter(f => f.group === fontTab.value)
+  fontTab.value === 'all' ? FONT_OPTIONS : FONT_OPTIONS.filter(f => f.group === fontTab.value),
 )
+
+/* ---- 模板事件 ---- */
+function handleBackToMain(): void {
+  view.value = 'main'
+}
+
+function handleToggleAuto(): void {
+  emit('auto')
+}
+
+function handleFontSizeInput(v: number): void {
+  void store.update({ fontSize: v })
+}
+
+function handleFontSmaller(): void {
+  void store.update({ fontSize: Math.max(12, s.value.fontSize - 1) })
+}
+
+function handleFontLarger(): void {
+  void store.update({ fontSize: Math.min(32, s.value.fontSize + 1) })
+}
+
+function handleMarginInput(v: number): void {
+  void store.update({ pageMargin: v })
+}
+
+function handleLineHeightInput(units: number): void {
+  void store.update({ lineHeight: 1.2 + units / 20 })
+}
+
+function handleOpenFonts(): void {
+  view.value = 'fonts'
+}
+
+function handleOpenIndent(): void {
+  view.value = 'indent'
+}
+
+function handleOpenTurn(): void {
+  view.value = 'turn'
+}
+
+function handlePickFontTab(t: { id: FontGroup | 'all' }): void {
+  fontTab.value = t.id
+}
+
+function handlePickFont(f: FontOption): void {
+  void store.update({ fontFamily: f.id })
+}
+
+function handleIndentOff(): void {
+  void store.update({ firstLineIndent: false })
+}
+
+function handleIndentOn(): void {
+  void store.update({ firstLineIndent: true })
+}
+
+function handleToggleParagraphSpacing(): void {
+  void store.update({ paragraphSpacing: !s.value.paragraphSpacing })
+}
+
+function handlePickTurnType(t: { id: TurnPageType }): void {
+  void store.update({ turnPageType: t.id })
+}
+
+function handlePickAutoSpeed(sec: number): void {
+  void store.update({ autoPageSeconds: sec })
+}
 </script>
 
 <template>
   <div class="font-panel" :class="{ 'font-panel--sub': view !== 'main' }" @click.stop>
     <!-- Sheet header for the three pickers -->
     <div v-if="view !== 'main'" class="fp-head">
-      <button class="fp-back" aria-label="返回" @click="view = 'main'">
+      <button class="fp-back" aria-label="返回" @click="handleBackToMain">
         <Icon name="chevron-down" :size="18" :width="2" />
       </button>
       <div class="fp-head-mid">
@@ -96,8 +163,10 @@ const shownFonts = computed(() =>
           v-if="view === 'turn'"
           class="fp-pill"
           :class="{ 'fp-pill--on': autoPaging }"
-          @click="emit('auto')"
-        >{{ autoPaging ? '关闭自动翻页' : '开启自动翻页' }}</button>
+          @click="handleToggleAuto"
+        >
+          {{ autoPaging ? '关闭自动翻页' : '开启自动翻页' }}
+        </button>
       </div>
     </div>
 
@@ -105,58 +174,56 @@ const shownFonts = computed(() =>
     <template v-if="view === 'main'">
       <div class="fp-slider">
         <CapsuleSlider
-          :min="12" :max="32" :step="1"
+          :min="12"
+          :max="32"
+          :step="1"
           :value="s.fontSize"
           :thumb-label="String(s.fontSize)"
-          @update:value="(v: number) => store.update({ fontSize: v })"
+          @update:value="handleFontSizeInput"
         >
           <template #min>
-            <button
-              class="fp-a fp-a--sm"
-              aria-label="缩小字号"
-              @click.stop="store.update({ fontSize: Math.max(12, s.fontSize - 1) })"
-            >A</button>
+            <button class="fp-a fp-a--sm" aria-label="缩小字号" @click.stop="handleFontSmaller">A</button>
           </template>
           <template #max>
-            <button
-              class="fp-a fp-a--lg"
-              aria-label="放大字号"
-              @click.stop="store.update({ fontSize: Math.min(32, s.fontSize + 1) })"
-            >A</button>
+            <button class="fp-a fp-a--lg" aria-label="放大字号" @click.stop="handleFontLarger">A</button>
           </template>
         </CapsuleSlider>
       </div>
 
       <div class="fp-dual">
         <CapsuleSlider
-          :min="4" :max="48" :step="1"
+          :min="4"
+          :max="48"
+          :step="1"
           :value="s.pageMargin"
           thumb-label="边距"
           min-label="小"
           max-label="大"
-          @update:value="(v: number) => store.update({ pageMargin: v })"
+          @update:value="handleMarginInput"
         />
         <CapsuleSlider
-          :min="12" :max="30" :step="1"
+          :min="12"
+          :max="30"
+          :step="1"
           :value="lineHeightUnits"
           thumb-label="行距"
           min-label="紧"
           max-label="松"
-          @update:value="(v: number) => store.update({ lineHeight: 1.2 + v / 20 })"
+          @update:value="handleLineHeightInput"
         />
       </div>
 
       <!-- Three picker rows; each opens its own sheet. -->
       <div class="fp-chips">
-        <button class="fp-chip" @click="view = 'fonts'">
+        <button class="fp-chip" @click="handleOpenFonts">
           <span>{{ fontLabelOf(s.fontFamily) }}</span>
           <Icon name="chevron-right" :size="13" :width="2.1" />
         </button>
-        <button class="fp-chip" @click="view = 'indent'">
+        <button class="fp-chip" @click="handleOpenIndent">
           <span>{{ s.firstLineIndent ? '首行缩进' : '首行顶格' }}</span>
           <Icon name="chevron-right" :size="13" :width="2.1" />
         </button>
-        <button class="fp-chip" @click="view = 'turn'">
+        <button class="fp-chip" @click="handleOpenTurn">
           <span>翻页方式</span>
           <Icon name="chevron-right" :size="13" :width="2.1" />
         </button>
@@ -171,8 +238,10 @@ const shownFonts = computed(() =>
           :key="t.id"
           class="fp-tab"
           :class="{ 'fp-tab--on': fontTab === t.id }"
-          @click="fontTab = t.id"
-        >{{ t.label }}</button>
+          @click="handlePickFontTab(t)"
+        >
+          {{ t.label }}
+        </button>
       </div>
       <div class="fp-font-grid">
         <button
@@ -181,8 +250,10 @@ const shownFonts = computed(() =>
           class="fp-font-card"
           :class="{ 'fp-font-card--on': s.fontFamily === f.id }"
           :style="{ fontFamily: f.stack }"
-          @click="store.update({ fontFamily: f.id })"
-        >{{ f.label }}</button>
+          @click="handlePickFont(f)"
+        >
+          {{ f.label }}
+        </button>
       </div>
     </div>
 
@@ -192,7 +263,7 @@ const shownFonts = computed(() =>
         <button
           class="fp-indent-card"
           :class="{ 'fp-indent-card--on': !s.firstLineIndent }"
-          @click="store.update({ firstLineIndent: false })"
+          @click="handleIndentOff"
         >
           <Icon name="align-left" :size="22" :width="1.8" class="fp-indent-icon" />
           <span class="fp-indent-label">首行顶格</span>
@@ -200,7 +271,7 @@ const shownFonts = computed(() =>
         <button
           class="fp-indent-card"
           :class="{ 'fp-indent-card--on': s.firstLineIndent }"
-          @click="store.update({ firstLineIndent: true })"
+          @click="handleIndentOn"
         >
           <Icon name="align-left" :size="22" :width="1.8" class="fp-indent-icon" />
           <span class="fp-indent-label">首行缩进</span>
@@ -213,7 +284,7 @@ const shownFonts = computed(() =>
               role="switch"
               :aria-checked="s.paragraphSpacing"
               aria-label="段间距"
-              @click="store.update({ paragraphSpacing: !s.paragraphSpacing })"
+              @click="handleToggleParagraphSpacing"
             >
               <span class="toggle__dot" />
             </button>
@@ -230,8 +301,10 @@ const shownFonts = computed(() =>
           :key="t.id"
           class="fp-turn-row"
           :class="{ 'fp-turn-row--on': s.turnPageType === t.id }"
-          @click="store.update({ turnPageType: t.id })"
-        >{{ t.label }}</button>
+          @click="handlePickTurnType(t)"
+        >
+          {{ t.label }}
+        </button>
       </div>
 
       <div class="fp-turn-speed">
@@ -241,8 +314,10 @@ const shownFonts = computed(() =>
           :key="sec"
           class="fp-turn-speed__btn"
           :class="{ 'fp-turn-speed__btn--on': s.autoPageSeconds === sec }"
-          @click="store.update({ autoPageSeconds: sec })"
-        >{{ sec }} 秒</button>
+          @click="handlePickAutoSpeed(sec)"
+        >
+          {{ sec }} 秒
+        </button>
       </div>
     </div>
   </div>
@@ -251,12 +326,14 @@ const shownFonts = computed(() =>
 <style scoped>
 .font-panel {
   position: absolute;
-  left: 0; right: 0; bottom: calc(52px + var(--safe-bottom));
+  left: 0;
+  right: 0;
+  bottom: calc(52px + var(--safe-bottom));
   z-index: 55;
   padding: 18px 18px 16px;
   background: var(--bg-panel);
   border-top: 1px solid var(--divider);
-  animation: panelUp .18s ease;
+  animation: panelUp 0.18s ease;
 }
 /* The picker sheets sit taller, like WeRead's. */
 .font-panel--sub {
@@ -265,8 +342,14 @@ const shownFonts = computed(() =>
   overflow: hidden;
 }
 @keyframes panelUp {
-  from { transform: translateY(12px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* ---- shared sheet header ---- */
@@ -339,15 +422,21 @@ const shownFonts = computed(() =>
   line-height: 1;
   padding: 0 2px;
 }
-.fp-a--sm { font-size: calc(14px * var(--app-font-scale)); }
-.fp-a--lg { font-size: calc(21px * var(--app-font-scale)); }
+.fp-a--sm {
+  font-size: calc(14px * var(--app-font-scale));
+}
+.fp-a--lg {
+  font-size: calc(21px * var(--app-font-scale));
+}
 
 .fp-dual {
   display: flex;
   gap: 14px;
   margin-top: 14px;
 }
-.fp-dual > * { flex: 1; }
+.fp-dual > * {
+  flex: 1;
+}
 
 .fp-chips {
   display: flex;
@@ -455,7 +544,9 @@ const shownFonts = computed(() =>
 .fp-indent-card--on .fp-indent-label {
   color: var(--accent);
 }
-.fp-indent-icon { color: var(--text-secondary); }
+.fp-indent-icon {
+  color: var(--text-secondary);
+}
 .fp-indent-label {
   font-size: calc(15px * var(--app-font-scale));
 }

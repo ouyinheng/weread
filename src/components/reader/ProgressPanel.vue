@@ -35,9 +35,7 @@ const dragging = ref(false)
 const dragValue = ref(0)
 const showDetail = ref(false)
 
-const value = computed(() =>
-  dragging.value ? dragValue.value : props.currentChapter
-)
+const value = computed(() => (dragging.value ? dragValue.value : props.currentChapter))
 
 const timeSegments = computed(() => durationSegments(props.readingTimeMs))
 const durationText = computed(() => formatDuration(props.readingTimeMs))
@@ -57,6 +55,23 @@ function step(delta: number) {
   dragging.value = false
   emit('jump', Math.min(top, Math.max(0, value.value + delta)))
 }
+
+/* ---- 模板事件 ---- */
+function handlePrevChapter(): void {
+  step(-1)
+}
+
+function handleNextChapter(): void {
+  step(1)
+}
+
+function handleToggleDetail(): void {
+  showDetail.value = !showDetail.value
+}
+
+function handleToggleAuto(): void {
+  emit('auto')
+}
 </script>
 
 <template>
@@ -64,7 +79,8 @@ function step(delta: number) {
     <div class="pp-stats">
       <div class="pp-stat">
         <div class="pp-stat-value">
-          <b>{{ percent.replace('%', '') }}</b><i>%</i>
+          <b>{{ percent.replace('%', '') }}</b
+          ><i>%</i>
         </div>
         <div class="pp-stat-label">{{ remain }}</div>
       </div>
@@ -72,14 +88,18 @@ function step(delta: number) {
       <div class="pp-stat">
         <div class="pp-stat-value">
           <template v-for="(seg, i) in timeSegments" :key="i">
-            <b v-if="seg.strong">{{ seg.text }}</b><i v-else>{{ seg.text }}</i>
+            <b v-if="seg.strong">{{ seg.text }}</b
+            ><i v-else>{{ seg.text }}</i>
           </template>
         </div>
         <div class="pp-stat-label">阅读时长</div>
       </div>
       <div class="pp-stat-divider" />
       <div class="pp-stat">
-        <div class="pp-stat-value"><b>{{ noteCount }}</b><i>条</i></div>
+        <div class="pp-stat-value">
+          <b>{{ noteCount }}</b
+          ><i>条</i>
+        </div>
         <div class="pp-stat-label">笔记</div>
       </div>
     </div>
@@ -95,12 +115,12 @@ function step(delta: number) {
         @change="onChange"
       >
         <template #min>
-          <button class="pp-step" aria-label="上一章" @click.stop="step(-1)">
+          <button class="pp-step" aria-label="上一章" @click.stop="handlePrevChapter">
             <Icon name="chevron-right" :size="14" :width="2.2" class="pp-step__flip" />
           </button>
         </template>
         <template #max>
-          <button class="pp-step" aria-label="下一章" @click.stop="step(1)">
+          <button class="pp-step" aria-label="下一章" @click.stop="handleNextChapter">
             <Icon name="chevron-right" :size="14" :width="2.2" />
           </button>
         </template>
@@ -110,16 +130,12 @@ function step(delta: number) {
     <div class="pp-here">上次读到这里</div>
 
     <div class="pp-actions">
-      <button
-        class="pp-action"
-        :class="{ 'pp-action--on': showDetail }"
-        @click="showDetail = !showDetail"
-      >阅读明细</button>
-      <button
-        class="pp-action"
-        :class="{ 'pp-action--on': autoPaging }"
-        @click="emit('auto')"
-      >{{ autoPaging ? '关闭自动翻页' : '开启自动翻页' }}</button>
+      <button class="pp-action" :class="{ 'pp-action--on': showDetail }" @click="handleToggleDetail">
+        阅读明细
+      </button>
+      <button class="pp-action" :class="{ 'pp-action--on': autoPaging }" @click="handleToggleAuto">
+        {{ autoPaging ? '关闭自动翻页' : '开启自动翻页' }}
+      </button>
     </div>
 
     <div v-if="showDetail" class="pp-detail">
@@ -142,16 +158,24 @@ function step(delta: number) {
 <style scoped>
 .progress-panel {
   position: absolute;
-  left: 0; right: 0; bottom: calc(52px + var(--safe-bottom));
+  left: 0;
+  right: 0;
+  bottom: calc(52px + var(--safe-bottom));
   z-index: 55;
   padding: 16px 20px;
   background: var(--bg-panel);
   border-top: 1px solid var(--divider);
-  animation: panelUp .18s ease;
+  animation: panelUp 0.18s ease;
 }
 @keyframes panelUp {
-  from { transform: translateY(12px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* Three columns with hairline separators, as in WeRead. */

@@ -56,9 +56,7 @@ const keepAliveNames = ['shelf', 'tv', 'me']
  */
 const showsListenBar = computed(() => {
   if (!listenSession.active.value) return false
-  const onOwnReader =
-    route.name === 'reader' &&
-    String(route.params.id || '') === listenSession.bookId.value
+  const onOwnReader = route.name === 'reader' && String(route.params.id || '') === listenSession.bookId.value
   return !(onOwnReader && listenSession.expanded.value)
 })
 
@@ -81,8 +79,7 @@ function closeListen() {
  * chapter behind during auto-advance.
  */
 async function expandListen() {
-  const onOwnReader =
-    route.name === 'reader' && String(route.params.id || '') === listenSession.bookId.value
+  const onOwnReader = route.name === 'reader' && String(route.params.id || '') === listenSession.bookId.value
   if (onOwnReader) {
     listenSession.expand()
     return
@@ -168,7 +165,11 @@ onMounted(async () => {
   await appSettings.load()
   await settings.loadSettings()
   // 读书源并读回总开关；失败不阻塞首屏（存储异常时会话仍可读本地书）。
-  try { await useSourceStore().load() } catch { /* 书源不可用时按本地库运行 */ }
+  try {
+    await useSourceStore().load()
+  } catch {
+    /* 书源不可用时按本地库运行 */
+  }
   syncDocumentTheme()
   syncNativeChrome()
 })
@@ -182,13 +183,10 @@ function onSchemeChange() {
 onMounted(() => darkMedia?.addEventListener?.('change', onSchemeChange))
 onBeforeUnmount(() => darkMedia?.removeEventListener?.('change', onSchemeChange))
 
-watch(
-  [() => settings.settings.theme, () => route.name, () => appSettings.app.theme],
-  () => {
-    syncDocumentTheme()
-    syncNativeChrome()
-  }
-)
+watch([() => settings.settings.theme, () => route.name, () => appSettings.app.theme], () => {
+  syncDocumentTheme()
+  syncNativeChrome()
+})
 
 watch(() => route.fullPath, syncNativeChrome, { flush: 'post' })
 
@@ -214,7 +212,7 @@ watch(
     if (isTabRoute(route.name) && !shown.includes(String(route.name))) {
       void router.replace({ name: homeTab(visibility) })
     }
-  }
+  },
 )
 
 /*
@@ -251,8 +249,7 @@ let removeBackListener: (() => void) | null = null
 
 function setupBackHandler() {
   if (!isNativeShell()) return
-  const app = (window as unknown as { Capacitor?: { Plugins?: Record<string, any> } })
-    .Capacitor?.Plugins?.App
+  const app = (window as unknown as { Capacitor?: { Plugins?: Record<string, any> } }).Capacitor?.Plugins?.App
   if (!app?.addListener) return
 
   const handle = app.addListener('backButton', () => {
@@ -279,7 +276,9 @@ function setupBackHandler() {
   })
 
   removeBackListener = () => {
-    Promise.resolve(handle).then(h => h?.remove?.()).catch(() => {})
+    Promise.resolve(handle)
+      .then(h => h?.remove?.())
+      .catch(() => {})
   }
 }
 

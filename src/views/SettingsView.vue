@@ -177,12 +177,69 @@ function about() {
     confirmText: '知道了',
   })
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handlePickTab(t: { id: 'reading' | 'system' }): void {
+  goTab(t.id)
+}
+
+function handleToggleNoAutoLock(): void {
+  void store.update({ noAutoLock: !s.value.noAutoLock })
+}
+
+function handleToggleLandscape(): void {
+  void store.update({ landscape: !s.value.landscape })
+}
+
+function handleToggleStatusBar(): void {
+  void store.update({ showStatusBar: !s.value.showStatusBar })
+}
+
+function handleToggleVolumeKeyTurn(): void {
+  void store.update({ volumeKeyTurn: !s.value.volumeKeyTurn })
+}
+
+function handleToggleListenFollow(): void {
+  void store.update({ listenFollow: !s.value.listenFollow })
+}
+
+function handleToggleListenAutoNext(): void {
+  void store.update({ listenAutoNext: !s.value.listenAutoNext })
+}
+
+function handleOpenFontSettings(): void {
+  void router.push({ name: 'fontSettings' })
+}
+
+function handleOpenAppFontSettings(): void {
+  void router.push({ name: 'fontSettings', query: { scope: 'app' } })
+}
+
+function handlePickAppTheme(t: { id: AppTheme }): void {
+  setAppTheme(t.id)
+}
+
+function handleToggleShelfTab(): void {
+  void appSettings.update({ showShelfTab: !app.value.showShelfTab })
+}
+
+function handleToggleTvTab(): void {
+  void appSettings.update({ showTvTab: !app.value.showTvTab })
+}
+
+function handlePickImport(): void {
+  pickAndImport()
+}
 </script>
 
 <template>
   <div class="settings-page">
     <header class="settings-header">
-      <button class="settings-back tap-target" @click="router.back()" aria-label="返回">
+      <button class="settings-back tap-target" @click="handleBack" aria-label="返回">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="settings-title">设置</span>
@@ -201,7 +258,7 @@ function about() {
         :class="{ 'settings-tab--on': activeTab === t.id }"
         role="tab"
         :aria-selected="activeTab === t.id"
-        @click="goTab(t.id)"
+        @click="handlePickTab(t)"
       >
         {{ t.label }}
       </button>
@@ -219,7 +276,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="s.noAutoLock"
-            @click="store.update({ noAutoLock: !s.noAutoLock })"
+            @click="handleToggleNoAutoLock"
           >
             <span class="settings-label">阅读时不自动锁屏</span>
             <span class="toggle" :class="{ on: s.noAutoLock }" aria-hidden="true">
@@ -230,7 +287,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="s.landscape"
-            @click="store.update({ landscape: !s.landscape })"
+            @click="handleToggleLandscape"
           >
             <span class="settings-label">阅读时允许横屏</span>
             <span class="toggle" :class="{ on: s.landscape }" aria-hidden="true">
@@ -241,7 +298,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="s.showStatusBar"
-            @click="store.update({ showStatusBar: !s.showStatusBar })"
+            @click="handleToggleStatusBar"
           >
             <span class="settings-label">阅读时显示时间和电量</span>
             <span class="toggle" :class="{ on: s.showStatusBar }" aria-hidden="true">
@@ -252,7 +309,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="s.volumeKeyTurn"
-            @click="store.update({ volumeKeyTurn: !s.volumeKeyTurn })"
+            @click="handleToggleVolumeKeyTurn"
           >
             <span class="settings-label">使用音量键翻页</span>
             <span class="toggle" :class="{ on: s.volumeKeyTurn }" aria-hidden="true">
@@ -271,7 +328,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="s.listenFollow"
-            @click="store.update({ listenFollow: !s.listenFollow })"
+            @click="handleToggleListenFollow"
           >
             <span class="settings-label">听书时跟随高亮</span>
             <span class="toggle" :class="{ on: s.listenFollow }" aria-hidden="true">
@@ -282,7 +339,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="s.listenAutoNext"
-            @click="store.update({ listenAutoNext: !s.listenAutoNext })"
+            @click="handleToggleListenAutoNext"
           >
             <span class="settings-label">听完本章自动播下一章</span>
             <span class="toggle" :class="{ on: s.listenAutoNext }" aria-hidden="true">
@@ -293,7 +350,7 @@ function about() {
 
         <!-- Typography entry: the face picker is its own page, like WeRead's. -->
         <div class="settings-group">
-          <button class="settings-cell" @click="router.push({ name: 'fontSettings' })">
+          <button class="settings-cell" @click="handleOpenFontSettings">
             <span class="settings-cell-label">字体</span>
             <span class="settings-cell-value">{{ fontLabelOf(s.fontFamily) }}</span>
             <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
@@ -304,10 +361,7 @@ function about() {
       <template v-else>
         <!-- 界面外观：只改应用外壳，阅读页的字号/字体/主题仍由阅读设置决定。 -->
         <div class="settings-group">
-          <button
-            class="settings-cell"
-            @click="router.push({ name: 'fontSettings', query: { scope: 'app' } })"
-          >
+          <button class="settings-cell" @click="handleOpenAppFontSettings">
             <span class="settings-cell-label">字体</span>
             <span class="settings-cell-value">{{ fontLabelOf(app.fontFamily) }}</span>
             <Icon name="chevron-right" :size="17" :width="2" class="settings-chevron" />
@@ -341,7 +395,7 @@ function about() {
                 :key="t.id"
                 class="theme-option"
                 :class="{ 'theme-option--on': app.theme === t.id }"
-                @click="setAppTheme(t.id)"
+                @click="handlePickAppTheme(t)"
               >
                 {{ t.label }}
               </button>
@@ -355,7 +409,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="app.showShelfTab"
-            @click="appSettings.update({ showShelfTab: !app.showShelfTab })"
+            @click="handleToggleShelfTab"
           >
             <span class="settings-label">显示书架入口</span>
             <span class="toggle" :class="{ on: app.showShelfTab }" aria-hidden="true">
@@ -366,7 +420,7 @@ function about() {
             class="settings-row settings-row--toggle"
             role="switch"
             :aria-checked="app.showTvTab"
-            @click="appSettings.update({ showTvTab: !app.showTvTab })"
+            @click="handleToggleTvTab"
           >
             <span class="settings-label">显示影视入口</span>
             <span class="toggle" :class="{ on: app.showTvTab }" aria-hidden="true">
@@ -396,7 +450,7 @@ function about() {
 
         <!-- Library -->
         <div class="settings-group">
-          <button class="settings-cell" @click="pickAndImport()">
+          <button class="settings-cell" @click="handlePickImport">
             <span class="settings-cell-label">导入本地书籍</span>
             <span class="settings-cell-value">{{ bookStore.books.length }} 本</span>
           </button>

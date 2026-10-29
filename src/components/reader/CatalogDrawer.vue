@@ -34,12 +34,16 @@ const filtered = computed(() => {
   return props.chapters.filter(c => (c.title || '').includes(q))
 })
 
-watch(() => props.current, () => {
-  requestAnimationFrame(() => {
-    const el = listEl.value?.querySelector('.catalog__row--current') as HTMLElement | null
-    el?.scrollIntoView({ block: 'center' })
-  })
-}, { immediate: true })
+watch(
+  () => props.current,
+  () => {
+    requestAnimationFrame(() => {
+      const el = listEl.value?.querySelector('.catalog__row--current') as HTMLElement | null
+      el?.scrollIntoView({ block: 'center' })
+    })
+  },
+  { immediate: true },
+)
 
 function pageLabel(index: number): number {
   if (props.pageOf) return props.pageOf(index)
@@ -63,10 +67,23 @@ function jumpEnds() {
     behavior: 'smooth',
   })
 }
+
+/* ---- 模板事件 ---- */
+function handleClose(): void {
+  emit('close')
+}
+
+function handleJump(ch: Chapter): void {
+  emit('jump', ch.index)
+}
+
+function handleBookmark(): void {
+  emit('bookmark')
+}
 </script>
 
 <template>
-  <div class="catalog-mask" @click.self="emit('close')">
+  <div class="catalog-mask" @click.self="handleClose">
     <div class="catalog">
       <div class="catalog__grabber" />
 
@@ -83,14 +100,14 @@ function jumpEnds() {
           <button
             class="catalog__row"
             :class="{ 'catalog__row--current': ch.index === current }"
-            @click="emit('jump', ch.index)"
+            @click="handleJump(ch)"
           >
             <span class="catalog__title">{{ ch.title || `第${ch.index + 1}章` }}</span>
             <span class="catalog__page">{{ pageLabel(ch.index) }}</span>
           </button>
 
           <div v-if="ch.index === current" class="catalog__here">
-            <button class="catalog__here-pin" @click="emit('bookmark')">
+            <button class="catalog__here-pin" @click="handleBookmark">
               <Icon name="bookmark" :size="16" />
               <span>当前读到</span>
             </button>
@@ -121,8 +138,12 @@ function jumpEnds() {
 }
 
 @keyframes maskIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .catalog {
@@ -138,8 +159,12 @@ function jumpEnds() {
 }
 
 @keyframes sheetUp {
-  from { transform: translate3d(0, 100%, 0); }
-  to { transform: translate3d(0, 0, 0); }
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .catalog__grabber {

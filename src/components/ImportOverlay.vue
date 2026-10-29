@@ -26,7 +26,11 @@ import { importState, dismissImportError } from '@/utils/importer'
     <button class="import-toast__close" aria-label="关闭" @click="dismissImportError">✕</button>
   </div>
 
-  <div v-else-if="importState.notice && !importState.busy" class="import-toast import-toast--ok" role="status">
+  <div
+    v-else-if="importState.notice && !importState.busy"
+    class="import-toast import-toast--ok"
+    role="status"
+  >
     <span class="import-toast__text">{{ importState.notice }}</span>
   </div>
 </template>
@@ -65,7 +69,9 @@ import { importState, dismissImportError } from '@/utils/importer'
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .import-hud__title {
@@ -101,8 +107,14 @@ import { importState, dismissImportError } from '@/utils/importer'
 }
 
 @keyframes toastIn {
-  from { opacity: 0; transform: translate(-50%, 8px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .import-toast__text {

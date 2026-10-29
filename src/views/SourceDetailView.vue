@@ -92,12 +92,21 @@ async function removeSource(): Promise<void> {
   await store.remove(s.id)
   router.replace({ name: 'sourceList' })
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handleCloseEditor(): void {
+  editing.value = false
+}
 </script>
 
 <template>
   <div class="src-detail">
     <header class="src-detail__header">
-      <button class="src-detail__back" aria-label="返回" @click="router.back()">
+      <button class="src-detail__back" aria-label="返回" @click="handleBack">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="src-detail__title">{{ source?.name || '书源详情' }}</span>
@@ -144,7 +153,9 @@ async function removeSource(): Promise<void> {
             enterkeyhint="search"
             @keyup.enter="run"
           />
-          <button class="src-debug-run" :disabled="running" @click="run">{{ running ? '运行中…' : '运行' }}</button>
+          <button class="src-debug-run" :disabled="running" @click="run">
+            {{ running ? '运行中…' : '运行' }}
+          </button>
         </div>
 
         <p v-if="runError" class="src-debug-error">{{ runError }}</p>
@@ -174,17 +185,17 @@ async function removeSource(): Promise<void> {
     </main>
 
     <!-- 原始 JSON 编辑 -->
-    <div v-if="editing" class="src-mask" @click.self="editing = false">
+    <div v-if="editing" class="src-mask" @click.self="handleCloseEditor">
       <div class="src-sheet">
         <div class="src-sheet__head">
           <span class="src-sheet__title">编辑书源 JSON</span>
-          <button class="src-sheet__close" aria-label="关闭" @click="editing = false">
+          <button class="src-sheet__close" aria-label="关闭" @click="handleCloseEditor">
             <Icon name="close" :size="18" :width="2" />
           </button>
         </div>
         <textarea v-model="rawText" class="src-sheet__input" spellcheck="false" />
         <div class="src-sheet__actions">
-          <button class="src-sheet__btn" @click="editing = false">取消</button>
+          <button class="src-sheet__btn" @click="handleCloseEditor">取消</button>
           <button class="src-sheet__btn src-sheet__btn--primary" :disabled="saving" @click="saveEdit">
             {{ saving ? '保存中…' : '保存' }}
           </button>
@@ -294,7 +305,7 @@ async function removeSource(): Promise<void> {
 }
 
 .src-line__value--error {
-  color: #E35B5B;
+  color: #e35b5b;
 }
 
 .src-dot {
@@ -347,7 +358,7 @@ async function removeSource(): Promise<void> {
 .src-debug-error {
   margin-top: 10px;
   font-size: calc(12px * var(--app-font-scale));
-  color: #E35B5B;
+  color: #e35b5b;
   line-height: 1.6;
 }
 
@@ -377,11 +388,11 @@ async function removeSource(): Promise<void> {
 }
 
 .src-step__icon--ok {
-  background: #33B36B;
+  background: #33b36b;
 }
 
 .src-step__icon--bad {
-  background: #E35B5B;
+  background: #e35b5b;
 }
 
 .src-step__text {
@@ -416,7 +427,7 @@ async function removeSource(): Promise<void> {
   border-radius: 10px;
   background: var(--bg-panel);
   font-size: calc(14px * var(--app-font-scale));
-  color: #E35B5B;
+  color: #e35b5b;
   flex-shrink: 0;
 }
 

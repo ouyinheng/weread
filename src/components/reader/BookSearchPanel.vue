@@ -33,10 +33,27 @@ onMounted(async () => {
   await nextTick()
   inputEl.value?.focus()
 })
+
+/* ---- 模板事件 ---- */
+function handleClose(): void {
+  emit('close')
+}
+
+function handleQueryInput(e: Event): void {
+  emit('update:query', (e.target as HTMLInputElement).value)
+}
+
+function handleClear(): void {
+  emit('update:query', '')
+}
+
+function handleJump(hit: BookSearchHit): void {
+  emit('jump', hit)
+}
 </script>
 
 <template>
-  <div class="bs-mask" @click.self="emit('close')">
+  <div class="bs-mask" @click.self="handleClose">
     <div class="bs">
       <div class="bs__grabber" />
 
@@ -47,14 +64,9 @@ onMounted(async () => {
           :value="query"
           placeholder="搜索本书正文"
           enterkeyhint="search"
-          @input="emit('update:query', ($event.target as HTMLInputElement).value)"
+          @input="handleQueryInput"
         />
-        <button
-          v-if="query"
-          class="bs__clear"
-          aria-label="清空搜索"
-          @click="emit('update:query', '')"
-        >×</button>
+        <button v-if="query" class="bs__clear" aria-label="清空搜索" @click="handleClear">×</button>
       </div>
 
       <div class="bs__meta">
@@ -64,9 +76,7 @@ onMounted(async () => {
         </span>
         <span v-else-if="query.trim()">{{ results.length }} 条结果</span>
         <span v-else>输入关键词，搜索本书正文</span>
-        <span v-if="cached < total" class="bs__meta-cache">
-          仅搜索已缓存的 {{ cached }}/{{ total }} 章
-        </span>
+        <span v-if="cached < total" class="bs__meta-cache"> 仅搜索已缓存的 {{ cached }}/{{ total }} 章 </span>
       </div>
 
       <div class="bs__list">
@@ -74,10 +84,13 @@ onMounted(async () => {
           v-for="(r, i) in results"
           :key="`${r.chapterIndex}-${r.domOffset}-${i}`"
           class="bs__row"
-          @click="emit('jump', r)"
+          @click="handleJump(r)"
         >
           <span class="bs__chapter">{{ r.chapterTitle || `第${r.chapterIndex + 1}章` }}</span>
-          <span class="bs__excerpt">{{ r.excerpt.slice(0, r.matchStart) }}<mark>{{ r.excerpt.slice(r.matchStart, r.matchEnd) }}</mark>{{ r.excerpt.slice(r.matchEnd) }}</span>
+          <span class="bs__excerpt"
+            >{{ r.excerpt.slice(0, r.matchStart) }}<mark>{{ r.excerpt.slice(r.matchStart, r.matchEnd) }}</mark
+            >{{ r.excerpt.slice(r.matchEnd) }}</span
+          >
         </button>
 
         <p v-if="!query.trim()" class="bs__hint">支持在整本书的正文里找一句话，不只看章节名。</p>
@@ -227,12 +240,20 @@ onMounted(async () => {
 }
 
 @keyframes maskIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes sheetUp {
-  from { transform: translate3d(0, 100%, 0); }
-  to { transform: translate3d(0, 0, 0); }
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
 }
 </style>

@@ -53,26 +53,31 @@ defineExpose({ done })
 
 watch(
   () => props.open,
-  (open) => {
+  open => {
     window.clearTimeout(timer)
     if (!open) return
     // 面板动画先走完再开始搜，否则列表在滑动过程中跳出来。
     timer = window.setTimeout(search, 260)
   },
-  { immediate: true }
+  { immediate: true },
 )
 
 onBeforeUnmount(() => window.clearTimeout(timer))
+
+/* ---- 模板事件 ---- */
+function handleClose(): void {
+  emit('close')
+}
 </script>
 
 <template>
   <transition name="cast">
-    <div v-if="open" class="cast-mask" @click="emit('close')">
+    <div v-if="open" class="cast-mask" @click="handleClose">
       <section class="cast" role="dialog" aria-label="投屏" @click.stop>
         <span class="cast__grab" />
         <header class="cast__head">
           <span class="cast__title">投屏</span>
-          <button class="cast__close" aria-label="关闭" @click="emit('close')">
+          <button class="cast__close" aria-label="关闭" @click="handleClose">
             <Icon name="close" :size="18" :width="2" />
           </button>
         </header>
@@ -189,7 +194,9 @@ onBeforeUnmount(() => window.clearTimeout(timer))
   text-align: left;
 }
 
-.cast__row:disabled { opacity: 0.6; }
+.cast__row:disabled {
+  opacity: 0.6;
+}
 
 .cast__icon {
   width: 38px;
@@ -227,7 +234,10 @@ onBeforeUnmount(() => window.clearTimeout(timer))
   white-space: nowrap;
 }
 
-.cast__chev { color: var(--text-secondary); flex-shrink: 0; }
+.cast__chev {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
 
 .cast__state {
   padding: 18px 0 8px;
@@ -270,12 +280,21 @@ onBeforeUnmount(() => window.clearTimeout(timer))
   animation: cast-spin 700ms linear infinite;
 }
 
-.cast__spinner--sm { width: 18px; height: 18px; }
+.cast__spinner--sm {
+  width: 18px;
+  height: 18px;
+}
 
-@keyframes cast-spin { to { transform: rotate(360deg); } }
+@keyframes cast-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .cast__spinner { animation-duration: 2s; }
+  .cast__spinner {
+    animation-duration: 2s;
+  }
 }
 
 .cast__again {

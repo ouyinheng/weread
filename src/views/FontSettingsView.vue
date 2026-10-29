@@ -10,7 +10,14 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppSettingsStore, useSettingsStore } from '@/stores'
-import { FONT_GROUPS, FONT_OPTIONS, fontLabelOf, fontStackOf, type FontGroup } from '@/utils/fonts'
+import {
+  FONT_GROUPS,
+  FONT_OPTIONS,
+  fontLabelOf,
+  fontStackOf,
+  type FontGroup,
+  type FontOption,
+} from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
 
 const route = useRoute()
@@ -32,19 +39,32 @@ const tabs = computed(() => {
 })
 
 const shown = computed(() =>
-  group.value === 'all' ? FONT_OPTIONS : FONT_OPTIONS.filter(f => f.group === group.value)
+  group.value === 'all' ? FONT_OPTIONS : FONT_OPTIONS.filter(f => f.group === group.value),
 )
 
 function choose(id: string) {
   if (isApp.value) void appStore.update({ fontFamily: id })
   else void store.update({ fontFamily: id })
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handlePickGroup(t: { id: FontGroup | 'all' }): void {
+  group.value = t.id
+}
+
+function handleChoose(f: FontOption): void {
+  choose(f.id)
+}
 </script>
 
 <template>
   <div class="font-page">
     <header class="font-header">
-      <button class="font-back tap-target" aria-label="返回" @click="router.back()">
+      <button class="font-back tap-target" aria-label="返回" @click="handleBack">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="font-title">{{ isApp ? '界面字体' : '字体' }}</span>
@@ -67,8 +87,10 @@ function choose(id: string) {
           :key="t.id"
           class="font-tab tap-target"
           :class="{ 'font-tab--on': group === t.id }"
-          @click="group = t.id"
-        >{{ t.label }}</button>
+          @click="handlePickGroup(t)"
+        >
+          {{ t.label }}
+        </button>
       </div>
 
       <div class="font-list">
@@ -77,7 +99,7 @@ function choose(id: string) {
           :key="f.id"
           class="font-row"
           :class="{ 'font-row--on': selected === f.id }"
-          @click="choose(f.id)"
+          @click="handleChoose(f)"
         >
           <span class="font-row__label">{{ f.label }}</span>
           <!-- Only the sample switches face: a list whose *labels* render in
@@ -87,7 +109,9 @@ function choose(id: string) {
         </button>
       </div>
 
-      <p v-if="!isApp" class="font-note">字号、边距、行距请在阅读页底部「字体」面板调整，改动会立即显示在正文上。</p>
+      <p v-if="!isApp" class="font-note">
+        字号、边距、行距请在阅读页底部「字体」面板调整，改动会立即显示在正文上。
+      </p>
     </div>
   </div>
 </template>
@@ -152,8 +176,14 @@ function choose(id: string) {
 }
 
 @keyframes fontIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .font-preview__sample {
@@ -194,7 +224,9 @@ function choose(id: string) {
   font-size: calc(13px * var(--app-font-scale));
   color: var(--text);
   white-space: nowrap;
-  transition: background-color 140ms, color 140ms;
+  transition:
+    background-color 140ms,
+    color 140ms;
 }
 
 .font-tab--on {

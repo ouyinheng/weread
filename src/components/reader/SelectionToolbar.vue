@@ -61,6 +61,35 @@ function saveNote() {
   }
   emit('note', t, color.value)
 }
+
+/* ---- 模板事件 ---- */
+function handlePickColor(c: { id: HighlightColor }): void {
+  color.value = c.id
+}
+
+function handleCopy(): void {
+  emit('copy')
+}
+
+function handleShare(): void {
+  emit('share')
+}
+
+function handleSelectAll(): void {
+  emit('selectAll')
+}
+
+function handleHighlight(): void {
+  emit('highlight', color.value)
+}
+
+function handleWebSearch(): void {
+  emit('webSearch')
+}
+
+function handleClose(): void {
+  emit('close')
+}
 </script>
 
 <template>
@@ -74,25 +103,25 @@ function saveNote() {
         :class="{ 'sel-color--on': color === c.id }"
         :style="{ background: c.css }"
         :aria-label="`${c.id} 划线`"
-        @click="color = c.id"
+        @click="handlePickColor(c)"
       />
     </div>
     <div class="sel-row">
-      <button class="sel-item" @click="emit('copy')">复制</button>
-      <button class="sel-item" @click="emit('share')">分享</button>
-      <button class="sel-item" :disabled="allSelected" @click="emit('selectAll')">全选</button>
+      <button class="sel-item" @click="handleCopy">复制</button>
+      <button class="sel-item" @click="handleShare">分享</button>
+      <button class="sel-item" :disabled="allSelected" @click="handleSelectAll">全选</button>
     </div>
     <div class="sel-row">
-      <button class="sel-item sel-item--primary" @click="emit('highlight', color)">划线</button>
+      <button class="sel-item sel-item--primary" @click="handleHighlight">划线</button>
       <button class="sel-item sel-item--primary" @click="openNote">想法</button>
-      <button class="sel-item" @click="emit('webSearch')">网页搜索</button>
+      <button class="sel-item" @click="handleWebSearch">网页搜索</button>
     </div>
   </div>
 
-  <div v-if="noteOpen" class="sel-note-mask" @click.self="emit('close')">
+  <div v-if="noteOpen" class="sel-note-mask" @click.self="handleClose">
     <div class="sel-note">
       <div class="sel-note__head">
-        <button class="sel-note__cancel" @click="emit('close')">取消</button>
+        <button class="sel-note__cancel" @click="handleClose">取消</button>
         <span class="sel-note__title">写想法</span>
         <button class="sel-note__save" @click="saveNote">保存</button>
       </div>
@@ -115,13 +144,21 @@ function saveNote() {
   overflow: hidden;
   border-radius: 12px;
   background: #fff;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 6px 24px rgba(0, 0, 0, 0.18),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
   animation: selIn 120ms ease-out;
 }
 
 @keyframes selIn {
-  from { opacity: 0; transform: translate(-50%, calc(-100% + 4px)); }
-  to { opacity: 1; transform: translate(-50%, -100%); }
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 4px));
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%);
+  }
 }
 
 .sel-row {
@@ -152,7 +189,9 @@ function saveNote() {
 }
 
 .sel-color--on {
-  box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    inset 0 0 0 2px #fff,
+    0 0 0 2px rgba(0, 0, 0, 0.35);
 }
 
 .sel-item {
@@ -164,7 +203,9 @@ function saveNote() {
   white-space: nowrap;
   border-right: 0.5px solid rgba(0, 0, 0, 0.08);
 }
-.sel-item:last-child { border-right: none; }
+.sel-item:last-child {
+  border-right: none;
+}
 .sel-item:disabled {
   color: rgba(0, 0, 0, 0.28);
 }

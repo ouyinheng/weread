@@ -70,7 +70,7 @@ onMounted(async () => {
   inputEl.value?.focus()
 })
 
-watch(query, (v) => {
+watch(query, v => {
   if (!v.trim() && submitted.value) {
     submitted.value = false
     sourceStore.clearResults()
@@ -173,10 +173,11 @@ function isAdded(h: SearchHit): boolean {
 
 /** 书架上已有同名书（另一个源）时，这个按钮就是「换源」。 */
 function shelfBookOf(h: SearchHit): Book | undefined {
-  return store.books.find(b =>
-    !!b.sourceId &&
-    normKey(b.title) === normKey(h.title) &&
-    normKey(b.author || '') === normKey(h.author || '')
+  return store.books.find(
+    b =>
+      !!b.sourceId &&
+      normKey(b.title) === normKey(h.title) &&
+      normKey(b.author || '') === normKey(h.author || ''),
   )
 }
 
@@ -220,6 +221,19 @@ async function doAction(group: HitGroup): Promise<void> {
   } finally {
     addingKey.value = ''
   }
+}
+
+/* ---- 模板事件 ---- */
+function handleSearchHistory(word: string): void {
+  searchFor(word)
+}
+
+function handlePickSource(group: HitGroup, hit: SearchHit): void {
+  picks.value[group.key] = hit.sourceId
+}
+
+function handleAdd(group: HitGroup): void {
+  void doAction(group)
 }
 </script>
 
@@ -268,12 +282,9 @@ async function doAction(group: HitGroup): Promise<void> {
             </button>
           </div>
           <div class="search__chips">
-            <button
-              v-for="h in history"
-              :key="h"
-              class="search__chip"
-              @click="searchFor(h)"
-            >{{ h }}</button>
+            <button v-for="h in history" :key="h" class="search__chip" @click="handleSearchHistory(h)">
+              {{ h }}
+            </button>
           </div>
         </div>
       </template>
@@ -303,21 +314,25 @@ async function doAction(group: HitGroup): Promise<void> {
                 <span class="search__book-author">
                   {{ g.primary.author || '未知作者' }} · {{ activeHit(g).sourceName }}
                 </span>
-                <span v-if="g.primary.lastChapter" class="search__result-last">{{ g.primary.lastChapter }}</span>
+                <span v-if="g.primary.lastChapter" class="search__result-last">{{
+                  g.primary.lastChapter
+                }}</span>
                 <div v-if="g.hits.length > 1" class="search__result-sources">
                   <button
                     v-for="h in g.hits"
                     :key="h.sourceId"
                     class="search__result-src"
                     :class="{ 'search__result-src--active': activeHit(g).sourceId === h.sourceId }"
-                    @click="picks[g.key] = h.sourceId"
-                  >{{ h.sourceName }}</button>
+                    @click="handlePickSource(g, h)"
+                  >
+                    {{ h.sourceName }}
+                  </button>
                 </div>
               </div>
               <button
                 class="search__result-add"
                 :class="{ 'search__result-add--done': actionFor(activeHit(g)) === 'added' }"
-                @click="doAction(g)"
+                @click="handleAdd(g)"
               >
                 {{ actionLabel(activeHit(g)) }}
               </button>
@@ -333,11 +348,9 @@ async function doAction(group: HitGroup): Promise<void> {
             {{ sourceStore.failures.length }} 个书源未返回结果：{{ failureText }}
           </p>
 
-          <p
-            v-if="sourceStore.searchScope.total > sourceStore.searchScope.searched"
-            class="search__hint"
-          >
-            已检索 {{ sourceStore.searchScope.searched }}/{{ sourceStore.searchScope.total }} 个启用书源。书源太多时每次只查前 20 个，可在书源管理里停用不用的源。
+          <p v-if="sourceStore.searchScope.total > sourceStore.searchScope.searched" class="search__hint">
+            已检索 {{ sourceStore.searchScope.searched }}/{{ sourceStore.searchScope.total }}
+            个启用书源。书源太多时每次只查前 20 个，可在书源管理里停用不用的源。
           </p>
         </template>
       </template>
@@ -539,7 +552,7 @@ async function doAction(group: HitGroup): Promise<void> {
   border-radius: 4px;
   overflow: hidden;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #5B7FA6, #3D5A80);
+  background: linear-gradient(135deg, #5b7fa6, #3d5a80);
   display: flex;
   align-items: center;
   justify-content: center;

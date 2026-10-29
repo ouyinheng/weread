@@ -2,6 +2,7 @@
 import { useRoute, useRouter } from 'vue-router'
 import { ref, computed, onMounted } from 'vue'
 import { useChapterStore, useBookmarkStore, useBookStore } from '@/stores'
+import type { Bookmark, Chapter } from '@/types'
 import Icon from '@/components/Icon.vue'
 
 type TabKey = 'catalog' | 'bookmark' | 'note'
@@ -50,12 +51,33 @@ function formatDate(ts: number): string {
 async function removeBookmark(id: string) {
   await bookmarkStore.removeBookmark(id)
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handlePickTab(t: { key: TabKey }): void {
+  activeTab.value = t.key
+}
+
+function handleJumpChapter(ch: Chapter): void {
+  jumpTo(ch.index)
+}
+
+function handleJumpBookmark(bm: Bookmark): void {
+  jumpTo(bm.chapterIndex)
+}
+
+function handleRemoveBookmark(bm: Bookmark): void {
+  void removeBookmark(bm.id)
+}
 </script>
 
 <template>
   <div class="catalog-page">
     <header class="catalog-header">
-      <button class="catalog-back tap-target" @click="router.back()">
+      <button class="catalog-back tap-target" @click="handleBack">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <div class="catalog-tabs">
@@ -64,8 +86,10 @@ async function removeBookmark(id: string) {
           :key="t.key"
           class="catalog-tab tap-target"
           :class="{ active: activeTab === t.key }"
-          @click="activeTab = t.key"
-        >{{ t.label }}</button>
+          @click="handlePickTab(t)"
+        >
+          {{ t.label }}
+        </button>
       </div>
     </header>
 
@@ -86,7 +110,7 @@ async function removeBookmark(id: string) {
         :key="ch.index"
         class="catalog-row"
         :class="{ 'catalog-row--current': book && ch.index === book.lastChapterIndex }"
-        @click="jumpTo(ch.index)"
+        @click="handleJumpChapter(ch)"
       >
         <span class="catalog-row-title">{{ ch.title || `第${ch.index + 1}章` }}</span>
         <span v-if="book && ch.index === book.lastChapterIndex" class="catalog-row-badge">当前读到</span>
@@ -97,12 +121,14 @@ async function removeBookmark(id: string) {
     <!-- Bookmarks -->
     <div v-else-if="activeTab === 'bookmark'" class="catalog-body">
       <div v-for="bm in bookmarks" :key="bm.id" class="bookmark-row">
-        <button class="bookmark-main" @click="jumpTo(bm.chapterIndex)">
-          <span class="bookmark-chapter">{{ chapters[bm.chapterIndex]?.title || `第${bm.chapterIndex + 1}章` }}</span>
+        <button class="bookmark-main" @click="handleJumpBookmark(bm)">
+          <span class="bookmark-chapter">{{
+            chapters[bm.chapterIndex]?.title || `第${bm.chapterIndex + 1}章`
+          }}</span>
           <span class="bookmark-excerpt">{{ bm.excerpt || '（无摘录）' }}</span>
           <span class="bookmark-time">{{ formatDate(bm.createdAt) }}</span>
         </button>
-        <button class="bookmark-del" @click="removeBookmark(bm.id)">删除</button>
+        <button class="bookmark-del" @click="handleRemoveBookmark(bm)">删除</button>
       </div>
       <p v-if="!bookmarks.length" class="catalog-empty">阅读时点「书签」即可记录当前位置</p>
     </div>
@@ -253,7 +279,7 @@ async function removeBookmark(id: string) {
 }
 .bookmark-del {
   font-size: calc(12px * var(--app-font-scale));
-  color: #E74C3C;
+  color: #e74c3c;
   padding: 8px 12px;
   flex-shrink: 0;
 }

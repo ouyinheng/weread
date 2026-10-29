@@ -43,9 +43,7 @@ const fileInput = ref<HTMLInputElement>()
 const bigSummary = computed(() => {
   if (!bigSize.value) return ''
   const mb = bigSize.value / 1024 / 1024
-  return mb >= 1
-    ? `${mb.toFixed(1)} MB 文本已就绪`
-    : `${Math.round(bigSize.value / 1024)} KB 文本已就绪`
+  return mb >= 1 ? `${mb.toFixed(1)} MB 文本已就绪` : `${Math.round(bigSize.value / 1024)} KB 文本已就绪`
 })
 
 function holdBig(text: string) {
@@ -94,9 +92,7 @@ const visibleCount = ref(PAGE_SIZE)
 const filteredSources = computed(() => {
   const q = filter.value.trim().toLowerCase()
   if (!q) return store.sources
-  return store.sources.filter(s =>
-    `${s.name} ${s.url} ${s.group || ''}`.toLowerCase().includes(q),
-  )
+  return store.sources.filter(s => `${s.name} ${s.url} ${s.group || ''}`.toLowerCase().includes(q))
 })
 
 const shownSources = computed(() => filteredSources.value.slice(0, visibleCount.value))
@@ -134,7 +130,8 @@ async function toggleNetwork(): Promise<void> {
   if (!store.networkEnabled) {
     const ok = await confirmDialog({
       title: '开启网络书源',
-      message: '开启后，搜索、加入书架、阅读未缓存章节和书源体检会向书源站点发起网络请求。书源地址可在本页查看。',
+      message:
+        '开启后，搜索、加入书架、阅读未缓存章节和书源体检会向书源站点发起网络请求。书源地址可在本页查看。',
       confirmText: '开启',
     })
     if (!ok) return
@@ -168,7 +165,7 @@ async function removeSource(s: BookSource): Promise<void> {
 async function doImport(): Promise<void> {
   if (importBusy.value) return
   // 大文本存在 bigPayload 里；小的照旧从 textarea 取。
-  const text = importMode.value === 'url' ? importUrl.value : (bigPayload || importText.value)
+  const text = importMode.value === 'url' ? importUrl.value : bigPayload || importText.value
   if (!text.trim()) {
     importError.value = importMode.value === 'url' ? '请先填写书源链接' : '请先粘贴书源 JSON 或选择文件'
     return
@@ -199,7 +196,11 @@ async function checkAll(): Promise<void> {
   await store.checkAll()
   const done = store.checkProgress.done
   const capped = done < total ? `本次先体检了 ${done} 个，再点一次可继续。` : `已体检 ${done} 个书源。`
-  await alertDialog({ title: '体检完成', message: `健康度已更新，${capped}点进单个书源可看哪一段失败。`, confirmText: '知道了' })
+  await alertDialog({
+    title: '体检完成',
+    message: `健康度已更新，${capped}点进单个书源可看哪一段失败。`,
+    confirmText: '知道了',
+  })
 }
 
 /** 失效源里有多少本书还挂在书架上：删源后这些书的未缓存章节会抓不到。 */
@@ -234,7 +235,10 @@ async function purgeDead(): Promise<void> {
     return
   }
 
-  const names = dead.slice(0, 5).map(s => `· ${s.name}`).join('\n')
+  const names = dead
+    .slice(0, 5)
+    .map(s => `· ${s.name}`)
+    .join('\n')
   const more = dead.length > 5 ? `\n· 另 ${dead.length - 5} 个` : ''
   const books = deadBookCount.value
   const bookNote = books
@@ -267,16 +271,41 @@ async function clearCache(): Promise<void> {
   const n = await store.clearCache()
   await alertDialog({ title: '已清除', message: `已清除 ${n} 个章节的正文。`, confirmText: '知道了' })
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handleOpenImport(): void {
+  showImport.value = true
+}
+
+function handleCloseImport(): void {
+  showImport.value = false
+}
+
+function handleShowMore(): void {
+  visibleCount.value += PAGE_SIZE
+}
+
+function handleUseUrlMode(): void {
+  importMode.value = 'url'
+}
+
+function handleUseJsonMode(): void {
+  importMode.value = 'json'
+}
 </script>
 
 <template>
   <div class="src-page">
     <header class="src-header">
-      <button class="src-back tap-target" aria-label="返回" @click="router.back()">
+      <button class="src-back tap-target" aria-label="返回" @click="handleBack">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="src-title">书源管理</span>
-      <button class="src-header-action tap-target" @click="showImport = true">导入</button>
+      <button class="src-header-action tap-target" @click="handleOpenImport">导入</button>
     </header>
 
     <main class="src-body">
@@ -312,7 +341,12 @@ async function clearCache(): Promise<void> {
       </div>
 
       <div v-if="store.sources.length" class="src-listbar">
-        <input v-model="filter" class="src-search" placeholder="搜索书名源名称、地址或分组" spellcheck="false" />
+        <input
+          v-model="filter"
+          class="src-search"
+          placeholder="搜索书名源名称、地址或分组"
+          spellcheck="false"
+        />
         <span class="src-count">{{ filteredSources.length }} / {{ store.sources.length }}</span>
       </div>
 
@@ -348,7 +382,7 @@ async function clearCache(): Promise<void> {
         </div>
       </div>
 
-      <button v-if="hasMore" class="src-more" @click="visibleCount += PAGE_SIZE">
+      <button v-if="hasMore" class="src-more" @click="handleShowMore">
         还有 {{ filteredSources.length - shownSources.length }} 个，显示更多
       </button>
 
@@ -358,11 +392,11 @@ async function clearCache(): Promise<void> {
     </main>
 
     <!-- 导入面板 -->
-    <div v-if="showImport" class="src-mask" @click.self="showImport = false">
+    <div v-if="showImport" class="src-mask" @click.self="handleCloseImport">
       <div class="src-sheet">
         <div class="src-sheet__head">
           <span class="src-sheet__title">导入书源</span>
-          <button class="src-sheet__close" aria-label="关闭" @click="showImport = false">
+          <button class="src-sheet__close" aria-label="关闭" @click="handleCloseImport">
             <Icon name="close" :size="18" :width="2" />
           </button>
         </div>
@@ -370,14 +404,14 @@ async function clearCache(): Promise<void> {
           <button
             class="src-sheet__tab"
             :class="{ 'src-sheet__tab--on': importMode === 'url' }"
-            @click="importMode = 'url'"
+            @click="handleUseUrlMode"
           >
             链接导入
           </button>
           <button
             class="src-sheet__tab"
             :class="{ 'src-sheet__tab--on': importMode === 'json' }"
-            @click="importMode = 'json'"
+            @click="handleUseJsonMode"
           >
             粘贴 JSON
           </button>
@@ -393,7 +427,8 @@ async function clearCache(): Promise<void> {
             autocomplete="off"
           />
           <p class="src-sheet__hint">
-            支持书源合集直链、legado://import/bookSource?src=… 分享链接。全量合集约 20MB，导入需要几十秒，请保持页面打开。
+            支持书源合集直链、legado://import/bookSource?src=… 分享链接。全量合集约
+            20MB，导入需要几十秒，请保持页面打开。
           </p>
         </template>
         <template v-else>
@@ -432,7 +467,7 @@ async function clearCache(): Promise<void> {
         </template>
         <p v-if="importError" class="src-sheet__error">{{ importError }}</p>
         <div class="src-sheet__actions">
-          <button class="src-sheet__btn" @click="showImport = false">取消</button>
+          <button class="src-sheet__btn" @click="handleCloseImport">取消</button>
           <button class="src-sheet__btn src-sheet__btn--primary" :disabled="importBusy" @click="doImport">
             {{ importBusy ? '导入中，大合集可能需要几十秒…' : '导入' }}
           </button>
@@ -441,4 +476,3 @@ async function clearCache(): Promise<void> {
     </div>
   </div>
 </template>
-

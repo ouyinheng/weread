@@ -20,9 +20,14 @@ const hash = computed(() => {
 })
 
 const colorPairs = [
-  ['#5B7FA6', '#3D5A80'], ['#A6745B', '#7A4E3B'], ['#6B8E5A', '#4A6B3E'],
-  ['#8E5A6B', '#6B3E4E'], ['#5A7B8E', '#3E5A6B'], ['#7A6B5A', '#5A4E3E'],
-  ['#6B5A8E', '#4E3E6B'], ['#8E7A5A', '#6B5A3E'],
+  ['#5B7FA6', '#3D5A80'],
+  ['#A6745B', '#7A4E3B'],
+  ['#6B8E5A', '#4A6B3E'],
+  ['#8E5A6B', '#6B3E4E'],
+  ['#5A7B8E', '#3E5A6B'],
+  ['#7A6B5A', '#5A4E3E'],
+  ['#6B5A8E', '#4E3E6B'],
+  ['#8E7A5A', '#6B5A3E'],
 ]
 
 const colors = computed(() => {
@@ -70,12 +75,12 @@ const firstChar = computed(() => props.book.title.charAt(0) || '书')
 .cover__char {
   font-size: 36px;
   font-weight: 700;
-  color: rgba(255,255,255,0.9);
+  color: rgba(255, 255, 255, 0.9);
   line-height: 1;
 }
 .cover__title {
   font-size: 11px;
-  color: rgba(255,255,255,0.75);
+  color: rgba(255, 255, 255, 0.75);
   margin-top: 8px;
   padding: 0 8px;
   text-align: center;

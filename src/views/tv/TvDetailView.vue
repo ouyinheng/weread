@@ -111,12 +111,42 @@ function play(episodeIndex: number, gi = groupIndex.value) {
 function metaText(): string {
   return [detail.value?.year, detail.value?.area, detail.value?.typeName].filter(Boolean).join(' · ')
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handlePlayPrimary(): void {
+  play(primary.value.ei, primary.value.gi)
+}
+
+function handleToggleDesc(): void {
+  descOpen.value = !descOpen.value
+}
+
+function handlePickGroup(i: number): void {
+  groupIndex.value = i
+  showAll.value = false
+}
+
+function handleToggleOrder(): void {
+  reversed.value = !reversed.value
+}
+
+function handlePlayEpisode(row: { index: number }): void {
+  play(row.index)
+}
+
+function handleToggleShowAll(): void {
+  showAll.value = !showAll.value
+}
 </script>
 
 <template>
   <div class="tv-detail">
     <header class="tv-detail__bar">
-      <button class="tv-detail__back" aria-label="返回" @click="router.back()">
+      <button class="tv-detail__back" aria-label="返回" @click="handleBack">
         <Icon name="back" :size="22" :width="2" />
       </button>
       <span class="tv-detail__bar-title">{{ detail?.name || '详情' }}</span>
@@ -138,7 +168,9 @@ function metaText(): string {
               <h1 class="tv-hero__name">{{ detail.name }}</h1>
               <p v-if="metaText()" class="tv-hero__meta">{{ metaText() }}</p>
               <div class="tv-hero__tags">
-                <span v-if="detail.remarks" class="tv-hero__tag tv-hero__tag--accent">{{ detail.remarks }}</span>
+                <span v-if="detail.remarks" class="tv-hero__tag tv-hero__tag--accent">{{
+                  detail.remarks
+                }}</span>
                 <span v-if="episodeCount" class="tv-hero__tag">全 {{ episodeCount }} 集</span>
                 <span class="tv-hero__tag">{{ detail.source.name }}</span>
               </div>
@@ -147,7 +179,7 @@ function metaText(): string {
         </section>
 
         <div class="tv-actions">
-          <button class="tv-actions__primary" @click="play(primary.ei, primary.gi)">
+          <button class="tv-actions__primary" @click="handlePlayPrimary">
             <Icon name="play" :size="16" :width="2" />
             <span>{{ primary.label }}</span>
           </button>
@@ -160,7 +192,7 @@ function metaText(): string {
 
         <section v-if="detail.desc" class="tv-desc" :class="{ 'tv-desc--open': descOpen }">
           <p class="tv-desc__text">{{ detail.desc }}</p>
-          <button v-if="descLong" class="tv-desc__toggle" @click="descOpen = !descOpen">
+          <button v-if="descLong" class="tv-desc__toggle" @click="handleToggleDesc">
             {{ descOpen ? '收起' : '展开' }}
           </button>
         </section>
@@ -172,7 +204,7 @@ function metaText(): string {
               :key="g.name + i"
               class="tv-eps__group"
               :class="{ 'tv-eps__group--active': i === groupIndex }"
-              @click="groupIndex = i; showAll = false"
+              @click="handlePickGroup(i)"
             >
               {{ g.name }}（{{ g.episodes.length }}）
             </button>
@@ -181,7 +213,7 @@ function metaText(): string {
           <div class="tv-eps__head">
             <span class="tv-eps__title">选集</span>
             <span class="tv-eps__count">{{ episodeCount }} 集</span>
-            <button class="tv-eps__order" @click="reversed = !reversed">
+            <button class="tv-eps__order" @click="handleToggleOrder">
               {{ reversed ? '倒序' : '正序' }}
             </button>
           </div>
@@ -191,14 +223,17 @@ function metaText(): string {
               v-for="row in visibleEps"
               :key="row.ep.url"
               class="tv-eps__item"
-              :class="{ 'tv-eps__item--last': last && last.groupIndex === groupIndex && last.episodeIndex === row.index }"
-              @click="play(row.index)"
+              :class="{
+                'tv-eps__item--last':
+                  last && last.groupIndex === groupIndex && last.episodeIndex === row.index,
+              }"
+              @click="handlePlayEpisode(row)"
             >
               {{ row.ep.name }}
             </button>
           </div>
 
-          <button v-if="hiddenCount" class="tv-eps__more" @click="showAll = !showAll">
+          <button v-if="hiddenCount" class="tv-eps__more" @click="handleToggleShowAll">
             {{ showAll ? '收起剧集' : `展开全部 ${episodeCount} 集` }}
             <MorphIcon :name="showAll ? 'chevron-down' : 'chevron-right'" :size="14" />
           </button>
@@ -262,7 +297,9 @@ function metaText(): string {
   font-size: 13px;
   color: var(--text-secondary);
 }
-.tv-detail__state--error { color: #d9534f; }
+.tv-detail__state--error {
+  color: #d9534f;
+}
 
 .tv-hero {
   position: relative;
@@ -300,7 +337,12 @@ function metaText(): string {
   background: var(--bg-secondary);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
 }
-.tv-hero__cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tv-hero__cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 .tv-hero__ph {
   display: flex;
   align-items: center;
@@ -309,7 +351,11 @@ function metaText(): string {
   font-size: 22px;
   color: var(--text-secondary);
 }
-.tv-hero__info { flex: 1; min-width: 0; padding-bottom: 2px; }
+.tv-hero__info {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 2px;
+}
 .tv-hero__name {
   margin: 0 0 6px;
   font-size: 20px;
@@ -327,7 +373,11 @@ function metaText(): string {
   color: var(--text-secondary);
   line-height: 1.5;
 }
-.tv-hero__tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tv-hero__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .tv-hero__tag {
   max-width: 100%;
   padding: 2px 8px;
@@ -366,10 +416,19 @@ function metaText(): string {
   font-weight: 600;
   font-family: inherit;
 }
-.tv-actions__primary:active { background: var(--accent-press); }
-.tv-actions__hint { flex: 0 0 auto; font-size: 11px; color: var(--text-secondary); }
+.tv-actions__primary:active {
+  background: var(--accent-press);
+}
+.tv-actions__hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 
-.tv-desc { position: relative; padding: 16px 16px 0; }
+.tv-desc {
+  position: relative;
+  padding: 16px 16px 0;
+}
 .tv-desc__text {
   margin: 0;
   font-size: 13px;
@@ -381,7 +440,9 @@ function metaText(): string {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.tv-desc--open .tv-desc__text { display: block; }
+.tv-desc--open .tv-desc__text {
+  display: block;
+}
 .tv-desc__toggle {
   margin-top: 4px;
   border: 0;
@@ -392,7 +453,10 @@ function metaText(): string {
   padding: 2px 0;
 }
 
-.tv-eps { margin-top: 18px; padding: 0 16px; }
+.tv-eps {
+  margin-top: 18px;
+  padding: 0 16px;
+}
 .tv-eps__groups {
   display: flex;
   gap: 8px;
@@ -400,7 +464,9 @@ function metaText(): string {
   padding-bottom: 12px;
   scrollbar-width: none;
 }
-.tv-eps__groups::-webkit-scrollbar { display: none; }
+.tv-eps__groups::-webkit-scrollbar {
+  display: none;
+}
 .tv-eps__group {
   flex: 0 0 auto;
   border: 1px solid var(--divider);
@@ -423,8 +489,16 @@ function metaText(): string {
   gap: 8px;
   margin-bottom: 10px;
 }
-.tv-eps__title { font-size: 15px; font-weight: 600; color: var(--text); }
-.tv-eps__count { flex: 1; font-size: 11px; color: var(--text-secondary); }
+.tv-eps__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tv-eps__count {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 .tv-eps__order {
   border: 1px solid var(--divider);
   border-radius: 12px;
@@ -436,8 +510,8 @@ function metaText(): string {
 }
 
 .tv-eps__grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .tv-eps__item {
@@ -453,7 +527,9 @@ function metaText(): string {
   white-space: nowrap;
   padding: 0 6px;
 }
-.tv-eps__item:active { opacity: 0.7; }
+.tv-eps__item:active {
+  opacity: 0.7;
+}
 .tv-eps__item--last {
   background: var(--accent-soft);
   color: var(--accent-on-soft);

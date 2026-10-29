@@ -19,7 +19,7 @@ withDefaults(
     active?: boolean
     size?: number
   }>(),
-  { active: false, size: 25 }
+  { active: false, size: 25 },
 )
 
 /* node_modules/remixicon/icons/Document/book-line.svg */

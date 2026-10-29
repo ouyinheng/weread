@@ -53,7 +53,9 @@ onMounted(async () => {
 function loadRecent() {
   try {
     const saved = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
-    recent.value = Array.isArray(saved) ? saved.filter((v): v is string => typeof v === 'string').slice(0, 8) : []
+    recent.value = Array.isArray(saved)
+      ? saved.filter((v): v is string => typeof v === 'string').slice(0, 8)
+      : []
   } catch {
     recent.value = []
   }
@@ -104,7 +106,7 @@ async function run(word?: string) {
   done.value = 0
   searching.value = true
 
-  await searchSources(store.enabledSources, q, (outcome) => {
+  await searchSources(store.enabledSources, q, outcome => {
     outcomes.value.push(outcome)
     done.value++
   })
@@ -132,12 +134,25 @@ function openDetail(item: TvItem) {
 function metaOf(item: TvItem): string {
   return [item.year, item.area, item.typeName].filter(Boolean).join(' · ')
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handleSearch(): void {
+  void run()
+}
+
+function handleSearchWord(word: string): void {
+  void run(word)
+}
 </script>
 
 <template>
   <div class="tv-search">
     <header class="tv-search__bar">
-      <button class="tv-search__back" aria-label="返回" @click="router.back()">
+      <button class="tv-search__back" aria-label="返回" @click="handleBack">
         <Icon name="back" :size="22" :width="2" />
       </button>
       <div class="tv-search__field">
@@ -149,13 +164,13 @@ function metaOf(item: TvItem): string {
           type="search"
           placeholder="搜电影、剧集、综艺"
           enterkeyhint="search"
-          @keyup.enter="run()"
+          @keyup.enter="handleSearch"
         />
         <button v-if="keyword" class="tv-search__clear" aria-label="清空" @click="clearInput">
           <Icon name="close" :size="14" :width="2" />
         </button>
       </div>
-      <button class="tv-search__submit" :disabled="searching || !keyword.trim()" @click="run()">
+      <button class="tv-search__submit" :disabled="searching || !keyword.trim()" @click="handleSearch">
         {{ searching ? '搜索中' : '搜索' }}
       </button>
     </header>
@@ -167,13 +182,17 @@ function metaOf(item: TvItem): string {
         已完成 {{ done }} / {{ store.enabledSources.length }} 个源
       </div>
 
-      <div v-if="!searching && !outcomes.length && !error" class="tv-search__idle" :class="{ 'tv-search__idle--empty': !recent.length }">
+      <div
+        v-if="!searching && !outcomes.length && !error"
+        class="tv-search__idle"
+        :class="{ 'tv-search__idle--empty': !recent.length }"
+      >
         <p v-if="recent.length" class="tv-search__idle-label">
           <span>最近搜索</span>
           <button class="tv-search__clear-history" @click="clearRecent">清空</button>
         </p>
         <div v-if="recent.length" class="tv-search__chips">
-          <button v-for="word in recent" :key="word" class="tv-chip" @click="run(word)">
+          <button v-for="word in recent" :key="word" class="tv-chip" @click="handleSearchWord(word)">
             {{ word }}
           </button>
         </div>
@@ -190,12 +209,7 @@ function metaOf(item: TvItem): string {
         </div>
 
         <div v-if="o.items.length" class="tv-grid">
-          <button
-            v-for="item in o.items"
-            :key="item.id"
-            class="tv-card"
-            @click="openDetail(item)"
-          >
+          <button v-for="item in o.items" :key="item.id" class="tv-card" @click="openDetail(item)">
             <div class="tv-card__cover">
               <img v-if="item.pic" :src="item.pic" alt="" loading="lazy" referrerpolicy="no-referrer" />
               <span v-else class="tv-card__ph">{{ item.name.slice(0, 2) }}</span>
@@ -276,7 +290,9 @@ function metaOf(item: TvItem): string {
   font-size: 14px;
   font-family: inherit;
 }
-.tv-search__input::-webkit-search-cancel-button { display: none; }
+.tv-search__input::-webkit-search-cancel-button {
+  display: none;
+}
 .tv-search__clear {
   display: flex;
   align-items: center;
@@ -298,7 +314,9 @@ function metaOf(item: TvItem): string {
   font-family: inherit;
   padding: 6px 4px;
 }
-.tv-search__submit:disabled { color: var(--text-secondary); }
+.tv-search__submit:disabled {
+  color: var(--text-secondary);
+}
 
 .tv-search__body {
   flex: 1;
@@ -314,7 +332,11 @@ function metaOf(item: TvItem): string {
   color: var(--text-secondary);
   margin: 4px 0 8px;
 }
-.tv-search__pending { display: flex; align-items: center; gap: 6px; }
+.tv-search__pending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .tv-search__dot {
   width: 6px;
   height: 6px;
@@ -322,13 +344,32 @@ function metaOf(item: TvItem): string {
   background: var(--accent);
   animation: pulse 1s ease-in-out infinite;
 }
-@keyframes pulse { 50% { opacity: 0.25; } }
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
 
-.tv-search__idle { padding-top: 6px; }
-.tv-search__idle--empty { padding-top: 16vh; }
-.tv-search__idle-title { margin: 0 0 6px; font-size: 15px; color: var(--text); text-align: center; }
-.tv-search__idle-desc { margin: 0; font-size: 12px; color: var(--text-secondary); }
-.tv-search__idle--empty .tv-search__idle-desc { text-align: center; }
+.tv-search__idle {
+  padding-top: 6px;
+}
+.tv-search__idle--empty {
+  padding-top: 16vh;
+}
+.tv-search__idle-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--text);
+  text-align: center;
+}
+.tv-search__idle-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.tv-search__idle--empty .tv-search__idle-desc {
+  text-align: center;
+}
 .tv-search__idle-label {
   display: flex;
   align-items: baseline;
@@ -363,7 +404,9 @@ function metaOf(item: TvItem): string {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tv-chip:active { opacity: 0.7; }
+.tv-chip:active {
+  opacity: 0.7;
+}
 
 .tv-search__error {
   margin: 10px 0;
@@ -377,15 +420,24 @@ function metaOf(item: TvItem): string {
   color: var(--text-secondary);
 }
 
-.tv-group { margin-bottom: 20px; }
+.tv-group {
+  margin-bottom: 20px;
+}
 .tv-group__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 8px;
 }
-.tv-group__name { font-size: 14px; font-weight: 600; color: var(--text); }
-.tv-group__count { font-size: 11px; color: var(--text-secondary); }
+.tv-group__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tv-group__count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 
 .tv-grid {
   display: grid;
@@ -400,7 +452,9 @@ function metaOf(item: TvItem): string {
   text-align: left;
   font-family: inherit;
 }
-.tv-card:active { opacity: 0.72; }
+.tv-card:active {
+  opacity: 0.72;
+}
 .tv-card__cover {
   position: relative;
   width: 100%;
@@ -409,7 +463,12 @@ function metaOf(item: TvItem): string {
   overflow: hidden;
   background: var(--bg-secondary);
 }
-.tv-card__cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tv-card__cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 .tv-card__ph {
   display: flex;
   align-items: center;
@@ -465,5 +524,9 @@ function metaOf(item: TvItem): string {
   background: var(--bg-secondary);
   animation: tv-pulse 1.2s ease-in-out infinite;
 }
-@keyframes tv-pulse { 50% { opacity: 0.45; } }
+@keyframes tv-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
 </style>

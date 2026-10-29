@@ -101,12 +101,17 @@ async function removePicked(): Promise<void> {
   picked.value = []
   if (!list.value.length) selecting.value = false
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
 </script>
 
 <template>
   <div class="hist">
     <header class="hist__bar">
-      <button class="hist__back tap-target" aria-label="返回" @click="router.back()">
+      <button class="hist__back tap-target" aria-label="返回" @click="handleBack">
         <Icon name="back" :size="24" :width="2" />
       </button>
       <span class="hist__title">观看记录</span>

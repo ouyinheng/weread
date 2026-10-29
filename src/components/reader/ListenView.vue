@@ -88,9 +88,7 @@ const bufferText = computed(() => {
 
 const offlineVoices = computed(() => voices.value.filter(v => v.local))
 const emotionalVoices = computed(() => voices.value.filter(v => v.provider === 'edge'))
-const onlineVoices = computed(() =>
-  voices.value.filter(v => !v.local && v.provider !== 'edge')
-)
+const onlineVoices = computed(() => voices.value.filter(v => !v.local && v.provider !== 'edge'))
 
 const selectedVoiceLabel = computed(() => {
   if (!props.voice) return '跟随系统默认'
@@ -155,9 +153,82 @@ function onCoverError(e: Event): void {
 }
 
 // 重新打开同一张面板时也要刷新音色（用户可能刚装了语音包）。
-watch(sheet, (v) => {
+watch(sheet, v => {
   if (v === 'voice') void loadVoiceList()
 })
+
+/* ---- 模板事件 ---- */
+function handleCollapse(): void {
+  emit('collapse')
+}
+
+function handleOpenMore(): void {
+  openSheet('more')
+}
+
+function handleOpenRate(): void {
+  openSheet('rate')
+}
+
+function handleOpenVoice(): void {
+  openSheet('voice')
+}
+
+function handleOpenTimer(): void {
+  openSheet('timer')
+}
+
+function handleFavorite(): void {
+  emit('favorite')
+}
+
+function handleCatalog(): void {
+  emit('catalog')
+}
+
+function handlePrev(): void {
+  emit('prev')
+}
+
+function handleToggle(): void {
+  emit('toggle')
+}
+
+function handleNext(): void {
+  emit('next')
+}
+
+function handleCloseSheet(): void {
+  sheet.value = null
+}
+
+function handlePickRate(r: number): void {
+  pickRate(r)
+}
+
+function handleVoiceDefault(): void {
+  pickVoice('')
+}
+
+function handlePickVoice(v: TtsVoice): void {
+  pickVoice(v.name)
+}
+
+function handlePickTimer(t: { minutes: number }): void {
+  pickTimer(t.minutes)
+}
+
+function handleFollow(): void {
+  emit('follow')
+}
+
+function handleAutoNext(): void {
+  emit('autoNext')
+}
+
+function handleClose(): void {
+  emit('close')
+}
 </script>
 
 <template>
@@ -165,11 +236,11 @@ watch(sheet, (v) => {
     <div class="lv__glow" aria-hidden="true" />
 
     <header class="lv__head">
-      <button class="lv__icon-btn" aria-label="收起" @click="emit('collapse')">
+      <button class="lv__icon-btn" aria-label="收起" @click="handleCollapse">
         <Icon name="chevron-down" :size="24" :width="2" />
       </button>
       <span class="lv__title">听书</span>
-      <button class="lv__icon-btn" aria-label="更多" @click="openSheet('more')">
+      <button class="lv__icon-btn" aria-label="更多" @click="handleOpenMore">
         <Icon name="more" :size="22" />
       </button>
     </header>
@@ -203,15 +274,15 @@ watch(sheet, (v) => {
     </article>
 
     <nav class="lv__actions">
-      <button class="lv__action" @click="openSheet('rate')">
+      <button class="lv__action" @click="handleOpenRate">
         <span class="lv__action-icon"><Icon name="speed" :size="22" /></span>
         <span class="lv__action-text">{{ rateText }}</span>
       </button>
-      <button class="lv__action" @click="emit('favorite')">
+      <button class="lv__action" @click="handleFavorite">
         <span class="lv__action-icon"><Icon name="bookmark" :size="22" /></span>
         <span class="lv__action-text">金句</span>
       </button>
-      <button class="lv__action" @click="openSheet('voice')">
+      <button class="lv__action" @click="handleOpenVoice">
         <span class="lv__action-icon"><Icon name="headphones" :size="22" /></span>
         <span class="lv__action-text">音色</span>
       </button>
@@ -240,11 +311,11 @@ watch(sheet, (v) => {
     </section>
 
     <section class="lv__transport">
-      <button class="lv__side" @click="emit('catalog')">
+      <button class="lv__side" @click="handleCatalog">
         <Icon name="catalog" :size="20" />
         <span>目录</span>
       </button>
-      <button class="lv__step" aria-label="上一句" :disabled="unavailable" @click="emit('prev')">
+      <button class="lv__step" aria-label="上一句" :disabled="unavailable" @click="handlePrev">
         <Icon name="skip-back" :size="26" :width="1.8" />
       </button>
       <button
@@ -252,27 +323,27 @@ watch(sheet, (v) => {
         :class="{ 'lv__main--busy': buffering }"
         :aria-label="buffering ? '取消准备' : playing ? '暂停' : '播放'"
         :disabled="unavailable"
-        @click="emit('toggle')"
+        @click="handleToggle"
       >
         <span v-if="buffering" class="lv__spinner" aria-hidden="true" />
         <MorphIcon v-else :name="playing ? 'pause' : 'play'" :size="30" :width="1.9" />
       </button>
-      <button class="lv__step" aria-label="下一句" :disabled="unavailable" @click="emit('next')">
+      <button class="lv__step" aria-label="下一句" :disabled="unavailable" @click="handleNext">
         <Icon name="skip-forward" :size="26" :width="1.8" />
       </button>
-      <button class="lv__side" :class="{ 'lv__side--on': timerLeft > 0 }" @click="openSheet('timer')">
+      <button class="lv__side" :class="{ 'lv__side--on': timerLeft > 0 }" @click="handleOpenTimer">
         <Icon name="timer" :size="20" />
         <span>{{ timerLeft ? timerText : '定时' }}</span>
       </button>
     </section>
 
     <section class="lv__cards">
-      <button class="lv__card" @click="openSheet('voice')">
+      <button class="lv__card" @click="handleOpenVoice">
         <span class="lv__card-title">音色设置</span>
         <span class="lv__card-sub">{{ selectedVoiceLabel }}</span>
         <Icon class="lv__card-arrow" name="chevron-right" :size="18" />
       </button>
-      <button class="lv__card" @click="emit('collapse')">
+      <button class="lv__card" @click="handleCollapse">
         <span class="lv__card-title">边听边读</span>
         <span class="lv__card-sub">收起后继续播放，回到正文</span>
         <Icon class="lv__card-arrow" name="chevron-right" :size="18" />
@@ -280,13 +351,21 @@ watch(sheet, (v) => {
     </section>
 
     <!-- 面板 -->
-    <div v-if="sheet" class="lv-sheet-mask" @click.self="sheet = null">
+    <div v-if="sheet" class="lv-sheet-mask" @click.self="handleCloseSheet">
       <div class="lv-sheet">
         <div class="lv-sheet__head">
           <span class="lv-sheet__title">
-            {{ sheet === 'rate' ? '朗读语速' : sheet === 'voice' ? '声音设置' : sheet === 'timer' ? '定时关闭' : '更多设置' }}
+            {{
+              sheet === 'rate'
+                ? '朗读语速'
+                : sheet === 'voice'
+                  ? '声音设置'
+                  : sheet === 'timer'
+                    ? '定时关闭'
+                    : '更多设置'
+            }}
           </span>
-          <button class="lv-sheet__close" aria-label="关闭" @click="sheet = null">
+          <button class="lv-sheet__close" aria-label="关闭" @click="handleCloseSheet">
             <Icon name="close" :size="18" :width="2" />
           </button>
         </div>
@@ -298,7 +377,7 @@ watch(sheet, (v) => {
               :key="r"
               class="lv-option"
               :class="{ 'lv-option--on': Math.abs(rate - r) < 0.001 }"
-              @click="pickRate(r)"
+              @click="handlePickRate(r)"
             >
               {{ Number(r.toFixed(2)) }}x
             </button>
@@ -307,17 +386,11 @@ watch(sheet, (v) => {
         </template>
 
         <template v-if="sheet === 'voice'">
-          <p class="lv-sheet__hint">
-            在线音色联网合成，语气更自然、能听出情绪；离线音色不耗流量。
-          </p>
+          <p class="lv-sheet__hint">在线音色联网合成，语气更自然、能听出情绪；离线音色不耗流量。</p>
           <div v-if="voicesLoading" class="lv-sheet__status">正在读取音色…</div>
           <p v-else-if="voicesError" class="lv-sheet__error">{{ voicesError }}</p>
           <div v-else class="lv-sheet__scroll">
-            <button
-              class="lv-voice"
-              :class="{ 'lv-voice--on': !voice }"
-              @click="pickVoice('')"
-            >
+            <button class="lv-voice" :class="{ 'lv-voice--on': !voice }" @click="handleVoiceDefault">
               <span class="lv-voice__name">跟随系统默认</span>
               <span class="lv-voice__meta">由系统自动选择中文音色</span>
               <Icon v-if="!voice" name="check" :size="18" class="lv-voice__check" />
@@ -330,7 +403,7 @@ watch(sheet, (v) => {
                 :key="v.name"
                 class="lv-voice"
                 :class="{ 'lv-voice--on': voice === v.name }"
-                @click="pickVoice(v.name)"
+                @click="handlePickVoice(v)"
               >
                 <span class="lv-voice__name">{{ v.label || v.name }}</span>
                 <span class="lv-voice__meta">{{ v.desc }} · 联网</span>
@@ -345,7 +418,7 @@ watch(sheet, (v) => {
                 :key="v.name"
                 class="lv-voice"
                 :class="{ 'lv-voice--on': voice === v.name }"
-                @click="pickVoice(v.name)"
+                @click="handlePickVoice(v)"
               >
                 <span class="lv-voice__name">{{ v.name }}</span>
                 <span class="lv-voice__meta">{{ v.lang }} · 离线</span>
@@ -360,7 +433,7 @@ watch(sheet, (v) => {
                 :key="v.name"
                 class="lv-voice"
                 :class="{ 'lv-voice--on': voice === v.name }"
-                @click="pickVoice(v.name)"
+                @click="handlePickVoice(v)"
               >
                 <span class="lv-voice__name">{{ v.name }}</span>
                 <span class="lv-voice__meta">{{ v.lang }} · 在线</span>
@@ -376,7 +449,7 @@ watch(sheet, (v) => {
               v-for="t in TIMERS"
               :key="t.minutes"
               class="lv-option lv-option--row"
-              @click="pickTimer(t.minutes)"
+              @click="handlePickTimer(t)"
             >
               {{ t.label }}
             </button>
@@ -389,14 +462,14 @@ watch(sheet, (v) => {
 
         <template v-if="sheet === 'more'">
           <div class="lv-sheet__list">
-            <button class="lv-row" role="switch" :aria-checked="follow" @click="emit('follow')">
+            <button class="lv-row" role="switch" :aria-checked="follow" @click="handleFollow">
               <span class="lv-row__text">
                 <span class="lv-row__title">跟随高亮</span>
                 <span class="lv-row__sub">朗读时正文自动滚到当前句</span>
               </span>
               <span class="toggle" :class="{ on: follow }"><span class="toggle__dot" /></span>
             </button>
-            <button class="lv-row" role="switch" :aria-checked="autoNext" @click="emit('autoNext')">
+            <button class="lv-row" role="switch" :aria-checked="autoNext" @click="handleAutoNext">
               <span class="lv-row__text">
                 <span class="lv-row__title">章末自动续播</span>
                 <span class="lv-row__sub">读完自动进入下一章</span>
@@ -407,7 +480,7 @@ watch(sheet, (v) => {
           <p class="lv-sheet__hint">
             锁屏或切到后台时，部分系统会暂停朗读；回到应用后会自动继续。本机不启用后台媒体服务。
           </p>
-          <button class="lv-sheet__danger" @click="emit('close')">退出听书</button>
+          <button class="lv-sheet__danger" @click="handleClose">退出听书</button>
         </template>
       </div>
     </div>
@@ -430,8 +503,14 @@ watch(sheet, (v) => {
 }
 
 @keyframes lvIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .lv__glow {
@@ -581,11 +660,15 @@ watch(sheet, (v) => {
 }
 
 @keyframes lvSpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lv__spinner { animation-duration: 2s; }
+  .lv__spinner {
+    animation-duration: 2s;
+  }
 }
 
 .lv__warn {
@@ -827,8 +910,14 @@ watch(sheet, (v) => {
 }
 
 @keyframes lvSheetUp {
-  from { transform: translateY(24px); opacity: 0.6; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .lv-sheet__head {

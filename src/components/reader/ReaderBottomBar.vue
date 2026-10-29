@@ -23,12 +23,33 @@ const emit = defineEmits<{
   catalog: []
   panel: [p: Exclude<ReaderPanel, 'none'>]
 }>()
+
+/* ---- 模板事件 ---- */
+function handleOpenCatalog(): void {
+  emit('catalog')
+}
+
+function handleOpenNotes(): void {
+  emit('panel', 'notes')
+}
+
+function handleOpenProgress(): void {
+  emit('panel', 'progress')
+}
+
+function handleOpenTheme(): void {
+  emit('panel', 'theme')
+}
+
+function handleOpenFont(): void {
+  emit('panel', 'font')
+}
 </script>
 
 <template>
   <div class="bottombar" @click.stop>
     <!-- 目录 -->
-    <button class="bottombar__item" aria-label="目录" @click="emit('catalog')">
+    <button class="bottombar__item" aria-label="目录" @click="handleOpenCatalog">
       <Icon name="catalog" :size="23" :width="1.7" />
     </button>
 
@@ -37,7 +58,7 @@ const emit = defineEmits<{
       class="bottombar__item"
       :class="{ 'bottombar__item--active': active === 'notes' }"
       aria-label="笔记"
-      @click="emit('panel', 'notes')"
+      @click="handleOpenNotes"
     >
       <span class="bottombar__icon-wrap">
         <Icon name="note" :size="25" :width="1.9" />
@@ -50,7 +71,7 @@ const emit = defineEmits<{
       class="bottombar__item"
       :class="{ 'bottombar__item--active': active === 'progress' }"
       aria-label="进度"
-      @click="emit('panel', 'progress')"
+      @click="handleOpenProgress"
     >
       <Icon name="progress" :size="25" :width="1.9" />
     </button>
@@ -60,7 +81,7 @@ const emit = defineEmits<{
       class="bottombar__item"
       :class="{ 'bottombar__item--active': active === 'theme' }"
       aria-label="亮度"
-      @click="emit('panel', 'theme')"
+      @click="handleOpenTheme"
     >
       <Icon name="brightness" :size="23" :width="1.7" />
     </button>
@@ -70,7 +91,7 @@ const emit = defineEmits<{
       class="bottombar__item"
       :class="{ 'bottombar__item--active': active === 'font' }"
       aria-label="字体"
-      @click="emit('panel', 'font')"
+      @click="handleOpenFont"
     >
       <Icon name="font" :size="23" :width="1.7" />
     </button>
@@ -100,8 +121,12 @@ const emit = defineEmits<{
 }
 
 @keyframes slideUp {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }
 
 .bottombar__item {

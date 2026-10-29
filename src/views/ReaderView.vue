@@ -2,13 +2,8 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBookStore, useChapterStore, useSettingsStore, useBookmarkStore } from '@/stores'
+import { addHighlight, applyHighlights, loadHighlights, removeHighlight } from '@/utils/highlights'
 import { dbGetAll } from '@/utils/db'
-import {
-  addHighlight,
-  applyHighlights,
-  loadHighlights,
-  removeHighlight,
-} from '@/utils/highlights'
 import type { Book, Chapter, Highlight, HighlightColor } from '@/types'
 import { ensureChapterText, restorePosition } from '@/utils/source/sourceService'
 import ReaderTopBar from '@/components/reader/ReaderTopBar.vue'
@@ -31,7 +26,12 @@ import { needsRebuild, rebuildBook } from '@/utils/library'
 import { tidyChapterHtml } from '@/utils/reader-html'
 import type { BookSearchHit } from '@/utils/book-search'
 import { useBookSearch } from '@/composables/useBookSearch'
-import { isNativeShell, EDGE_GESTURE_INSET, applyReaderNativeMode, resetReaderNativeMode } from '@/utils/native'
+import {
+  isNativeShell,
+  EDGE_GESTURE_INSET,
+  applyReaderNativeMode,
+  resetReaderNativeMode,
+} from '@/utils/native'
 import { openOverlay, closeOverlay } from '@/utils/ui-state'
 import {
   countChars,
@@ -112,9 +112,10 @@ const currentCharOffset = computed(() => pageToChar(currentPage.value))
 function chapterPage(index: number): number {
   const list = chapterChars.value
   if (!list.length) return index + 1
-  const charsPerPage = Math.max(1, Math.round(
-    (chapterChars.value[currentChapter.value] || 1) / Math.max(1, totalPages.value)
-  ))
+  const charsPerPage = Math.max(
+    1,
+    Math.round((chapterChars.value[currentChapter.value] || 1) / Math.max(1, totalPages.value)),
+  )
   return 1 + Math.round(charsBeforeChars(list, index) / charsPerPage)
 }
 
@@ -288,12 +289,13 @@ function applySelectionRange(start: number, end: number) {
 
   const first = rects[0]
   const last = rects[rects.length - 1] || first
-  const handles = first && last
-    ? [
-        { x: first.x, y: first.y + first.h / 2 },
-        { x: last.x + last.w, y: last.y + last.h / 2 },
-      ]
-    : []
+  const handles =
+    first && last
+      ? [
+          { x: first.x, y: first.y + first.h / 2 },
+          { x: last.x + last.w, y: last.y + last.h / 2 },
+        ]
+      : []
 
   sel.value = { start, end, text: full.slice(start, end), rects, handles }
 
@@ -417,7 +419,9 @@ let selectionStartedThisTouch = false
 function suppressClickOnce() {
   suppressNextClick = true
   if (suppressTimer) clearTimeout(suppressTimer)
-  suppressTimer = setTimeout(() => { suppressNextClick = false }, 400)
+  suppressTimer = setTimeout(() => {
+    suppressNextClick = false
+  }, 400)
 }
 
 function handleHit(x: number, y: number): 'start' | 'end' | null {
@@ -460,9 +464,11 @@ let lastTouchAt = 0
  * do not expose it.
  */
 function isSyntheticMouse(e: MouseEvent): boolean {
-  const caps = (e as MouseEvent & {
-    sourceCapabilities?: { firesTouchEvents?: boolean }
-  }).sourceCapabilities
+  const caps = (
+    e as MouseEvent & {
+      sourceCapabilities?: { firesTouchEvents?: boolean }
+    }
+  ).sourceCapabilities
   return Boolean(caps?.firesTouchEvents) || Date.now() - lastTouchAt < 500
 }
 
@@ -582,17 +588,16 @@ const isCjkChapter = computed(() => {
  * chapter would report 90–99% (and the book would never be marked 已读完).
  * Reaching that page is the end of the book, so report it as 100%.
  */
-const atBookEnd = computed(() =>
-  !loading.value &&
-  chapterList.value.length > 0 &&
-  currentChapter.value === chapterList.value.length - 1 &&
-  currentPage.value >= totalPages.value - 1
+const atBookEnd = computed(
+  () =>
+    !loading.value &&
+    chapterList.value.length > 0 &&
+    currentChapter.value === chapterList.value.length - 1 &&
+    currentPage.value >= totalPages.value - 1,
 )
 
 const percentValue = computed(() =>
-  atBookEnd.value
-    ? 100
-    : progressPercent(chapterChars.value, currentChapter.value, currentCharOffset.value)
+  atBookEnd.value ? 100 : progressPercent(chapterChars.value, currentChapter.value, currentCharOffset.value),
 )
 
 const percentText = computed(() => `${Math.round(percentValue.value)}%`)
@@ -613,7 +618,7 @@ const remainText = computed(() => {
 const dimOpacity = computed(() => {
   const v = settings.value.brightness
   if (v < 0) return 0
-  return Math.min(0.6, Math.max(0, (100 - v) / 100 * 0.6))
+  return Math.min(0.6, Math.max(0, ((100 - v) / 100) * 0.6))
 })
 
 /* ---------- pagination ---------- */
@@ -761,7 +766,9 @@ async function renderChapter(charOffset = 0) {
     paginating.value = true
     await nextTick()
     await new Promise(r => setTimeout(r, 16))
-    setTimeout(() => { paginating.value = false }, 0)
+    setTimeout(() => {
+      paginating.value = false
+    }, 0)
   }
 
   await nextTick()
@@ -885,7 +892,9 @@ async function jumpToSearchHit(hit: BookSearchHit): Promise<void> {
     end: hit.domOffset + Math.max(1, word.length),
   }
   if (searchHitTimer) clearTimeout(searchHitTimer)
-  searchHitTimer = setTimeout(() => { searchHit.value = null }, 6000)
+  searchHitTimer = setTimeout(() => {
+    searchHit.value = null
+  }, 6000)
   await nextTick()
   await renderChapter(hit.charOffset)
   saveProgress()
@@ -945,8 +954,8 @@ async function favoriteSentence(): Promise<void> {
   const from = listenCharOffsets.value[i] ?? 0
   const raw = body ? rawRangeOfChars(body, from, from + spokenLength(s.text)) : null
   if (!raw) return
-  const exists = highlights.value.some(h =>
-    h.chapterIndex === chapterIndex && h.start === raw.start && h.end === raw.end
+  const exists = highlights.value.some(
+    h => h.chapterIndex === chapterIndex && h.start === raw.start && h.end === raw.end,
   )
   if (exists) return
   const row = await addHighlight({
@@ -975,11 +984,7 @@ function spokenLength(text: string): number {
  * Walking the body once is what makes the two coordinate systems meet, and it
  * keeps the mapping correct across `<mark>` nodes the highlight pass injects.
  */
-function rawRangeOfChars(
-  body: Element,
-  from: number,
-  to: number
-): { start: number; end: number } | null {
+function rawRangeOfChars(body: Element, from: number, to: number): { start: number; end: number } | null {
   if (to <= from) return null
   const text = body.textContent || ''
   let seen = 0
@@ -1004,7 +1009,7 @@ function rawRangeOfChars(
 function rectsOfChars(
   from: number,
   to: number,
-  clip = true
+  clip = true,
 ): { x: number; y: number; w: number; h: number }[] {
   const body = contentEl.value?.querySelector('.reader__body')
   if (!body) return []
@@ -1040,8 +1045,8 @@ async function settlePage(from: number, to: number) {
     if (!rects.length) return
     const vp = viewportEl.value?.getBoundingClientRect()
     if (!vp) return
-    const visible = rects.some(r =>
-      r.x + r.w > vp.left && r.x < vp.right && r.y + r.h > vp.top && r.y < vp.bottom
+    const visible = rects.some(
+      r => r.x + r.w > vp.left && r.x < vp.right && r.y + r.h > vp.top && r.y < vp.bottom,
     )
     if (visible) return
 
@@ -1226,8 +1231,7 @@ let dragStartedAt = 0
 const EDGE = EDGE_GESTURE_INSET
 
 function canGoNext(): boolean {
-  return currentPage.value < totalPages.value - 1 ||
-    currentChapter.value < chapterList.value.length - 1
+  return currentPage.value < totalPages.value - 1 || currentChapter.value < chapterList.value.length - 1
 }
 
 function canGoPrev(): boolean {
@@ -1287,7 +1291,10 @@ function onTouchMove(e: TouchEvent) {
     const dy = t.clientY - touchStartY
     if (!dragging && Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) {
       // A horizontal drag is a page turn, never a long-press selection.
-      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null }
+      if (pressTimer) {
+        clearTimeout(pressTimer)
+        pressTimer = null
+      }
       dragging = true
       touchMoved = true
     }
@@ -1345,7 +1352,10 @@ function onTap(e: MouseEvent) {
     suppressNextClick = false
     return
   }
-  if (touchMoved) { touchMoved = false; return }
+  if (touchMoved) {
+    touchMoved = false
+    return
+  }
   // A tap while a selection is up should dismiss the bar, not turn the page.
   if (sel.value) {
     clearSelection()
@@ -1381,7 +1391,7 @@ function saveProgress() {
       // Progress must never go backwards for the same read-through, but
       // "从头开始" resets it explicitly through the shelf menu.
       progress: Math.max(book.value.progress, pct),
-      finished: pct >= 99
+      finished: pct >= 99,
     }
     // 在线书：记住源站章节地址，目录变动后还能对回这一章。
     const remote = chapterUrls.value.get(currentChapter.value)
@@ -1395,8 +1405,7 @@ watch([currentPage, currentChapter], saveProgress)
 /* ---------- bookmarks ---------- */
 /** A bookmark belongs to the page it was made on, not to the whole chapter. */
 function isBookmarkOnCurrentPage(b: { chapterIndex: number; charOffset: number }): boolean {
-  return b.chapterIndex === currentChapter.value &&
-    charToPage(b.charOffset) === currentPage.value
+  return b.chapterIndex === currentChapter.value && charToPage(b.charOffset) === currentPage.value
 }
 
 const isBookmarked = computed(() => bookmarkStore.bookmarks.some(isBookmarkOnCurrentPage))
@@ -1418,7 +1427,10 @@ function leaveReader() {
 /** Share the visible page as text via the Web Share API, falling back to copy. */
 async function shareExcerpt() {
   const html = chapterHtml.value.get(currentChapter.value) || ''
-  const plain = html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+  const plain = html
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
   const excerpt = plain.slice(currentCharOffset.value, currentCharOffset.value + 200)
   const text = `${book.value?.title || ''} · ${currentChapterTitle.value}\n\n${excerpt}`
   try {
@@ -1447,9 +1459,7 @@ async function removeBookmark(id: string) {
 }
 
 async function toggleBookmark() {
-  const existing = bookmarkStore.bookmarks.find(
-    b => b.bookId === bookId && isBookmarkOnCurrentPage(b)
-  )
+  const existing = bookmarkStore.bookmarks.find(b => b.bookId === bookId && isBookmarkOnCurrentPage(b))
   if (existing) {
     await bookmarkStore.removeBookmark(existing.id)
   } else {
@@ -1463,7 +1473,7 @@ async function toggleBookmark() {
       chapterIndex: currentChapter.value,
       charOffset: currentCharOffset.value,
       excerpt: excerpt || plain.slice(0, 60),
-      createdAt: Date.now()
+      createdAt: Date.now(),
     })
   }
 }
@@ -1477,7 +1487,9 @@ function startSession() {
   sessionStart = Date.now()
   clearInterval(sessionTimer)
   // Flush every 30s so a hard kill loses at most half a minute.
-  sessionTimer = setInterval(() => { flushSession() }, 30000)
+  sessionTimer = setInterval(() => {
+    flushSession()
+  }, 30000)
 }
 
 async function flushSession() {
@@ -1543,7 +1555,7 @@ watch(
     if (showMenu.value) return 'reader:menu'
     return ''
   },
-  (id) => {
+  id => {
     if (activeOverlayId.value) closeOverlay(activeOverlayId.value)
     activeOverlayId.value = id
     if (!id) return
@@ -1555,7 +1567,7 @@ watch(
       else showMenu.value = false
     })
   },
-  { immediate: true }
+  { immediate: true },
 )
 
 /* ---------- lifecycle ---------- */
@@ -1596,7 +1608,9 @@ onMounted(async () => {
   if (!book.value.sourceId && needsRebuild(book.value)) {
     try {
       if (await rebuildBook(book.value)) await bookStore.loadBooks()
-    } catch { /* no stored source: keep reading what we have */ }
+    } catch {
+      /* no stored source: keep reading what we have */
+    }
   }
 
   await chapterStore.loadChapters(bookId)
@@ -1624,10 +1638,7 @@ onMounted(async () => {
   const queryChapter = Number(route.query.chapter)
   let restoreChar = 0
   if (resumeListen) {
-    currentChapter.value = Math.min(
-      listen.chapterIndex.value,
-      Math.max(0, chapterList.value.length - 1)
-    )
+    currentChapter.value = Math.min(listen.chapterIndex.value, Math.max(0, chapterList.value.length - 1))
     restoreChar = listen.currentOffset.value
   } else if (Number.isInteger(queryChapter) && queryChapter >= 0 && queryChapter < chapterList.value.length) {
     currentChapter.value = queryChapter
@@ -1670,7 +1681,7 @@ onMounted(async () => {
 
   // Native volume keys arrive here; the shell only forwards them while the
   // setting is on, so no extra guard is needed.
-  window.__readerVolumeTurn = (dir) => {
+  window.__readerVolumeTurn = dir => {
     if (dir === 'prev') prevPage()
     else nextPage()
   }
@@ -1691,18 +1702,19 @@ onMounted(async () => {
  * text must be re-paginated while holding the reader on the same character.
  */
 watch(
-  () => [
-    settings.value.fontSize,
-    settings.value.lineHeight,
-    settings.value.pageMargin,
-    settings.value.turnPageType,
-  ].join('|'),
+  () =>
+    [
+      settings.value.fontSize,
+      settings.value.lineHeight,
+      settings.value.pageMargin,
+      settings.value.turnPageType,
+    ].join('|'),
   async () => {
     if (loading.value) return
     const charOffset = currentCharOffset.value
     await nextTick()
     await renderChapter(charOffset)
-  }
+  },
 )
 
 function onVisibility() {
@@ -1759,14 +1771,80 @@ function onKeydown(e: KeyboardEvent) {
 function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   activePanel.value = activePanel.value === p ? 'none' : p
 }
+
+/* ---- 模板事件 ---- */
+function handleBack(): void {
+  router.back()
+}
+
+function handleOpenNotes(): void {
+  activePanel.value = 'notes'
+}
+
+function handleOpenProgress(): void {
+  activePanel.value = 'progress'
+}
+
+function handleClosePanel(): void {
+  activePanel.value = 'none'
+}
+
+function handleOpenBookMenu(): void {
+  showBookMenu.value = true
+}
+
+function handleCloseBookMenu(): void {
+  showBookMenu.value = false
+}
+
+function handleOpenCatalog(): void {
+  showCatalog.value = true
+}
+
+function handleCloseCatalog(): void {
+  showCatalog.value = false
+}
+
+/** 更多面板里的「回到开头」：跳章节的同时收起面板。 */
+function handleRestartReading(): void {
+  jumpToChapter(0)
+  showBookMenu.value = false
+}
+
+/** 更多面板里的「查看目录」：目录盖上来，菜单一起收掉。 */
+function handleOpenCatalogFromMenu(): void {
+  showCatalog.value = true
+  showBookMenu.value = false
+}
+
+function handleBookmarkFromCatalog(): void {
+  void toggleBookmark()
+  showCatalog.value = false
+}
+
+function handleSearchQuery(value: string): void {
+  searchQuery.value = value
+}
+
+function handleListenToggle(): void {
+  listen.toggle()
+}
+
+function handleListenPrev(): void {
+  listen.prev()
+}
+
+function handleListenNext(): void {
+  listen.next()
+}
+
+function handleListenSeek(i: number): void {
+  listen.seek(i)
+}
 </script>
 
 <template>
-  <div
-    class="reader"
-    :data-theme="settings.theme"
-    :style="readerSurface"
-  >
+  <div class="reader" :data-theme="settings.theme" :style="readerSurface">
     <!-- Reading viewport -->
     <div
       ref="viewportEl"
@@ -1800,32 +1878,29 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
           'reader__pages--cjk': isCjkChapter,
           'reader__pages--latin': !isCjkChapter,
         }"
-        :style="isScrollMode
-          ? {
-              fontSize: settings.fontSize + 'px',
-              lineHeight: settings.lineHeight,
-              fontFamily: fontStackOf(settings.fontFamily),
-            }
-          : {
-              width: pageBox.w + 'px',
-              height: pageBox.h + 'px',
-              fontSize: settings.fontSize + 'px',
-              lineHeight: settings.lineHeight,
-              fontFamily: fontStackOf(settings.fontFamily),
-              columnWidth: pageBox.w + 'px',
-              columnGap: pageBox.gap + 'px',
-            }"
+        :style="
+          isScrollMode
+            ? {
+                fontSize: settings.fontSize + 'px',
+                lineHeight: settings.lineHeight,
+                fontFamily: fontStackOf(settings.fontFamily),
+              }
+            : {
+                width: pageBox.w + 'px',
+                height: pageBox.h + 'px',
+                fontSize: settings.fontSize + 'px',
+                lineHeight: settings.lineHeight,
+                fontFamily: fontStackOf(settings.fontFamily),
+                columnWidth: pageBox.w + 'px',
+                columnGap: pageBox.gap + 'px',
+              }
+        "
         v-html="renderedHtml"
       />
     </div>
 
     <!-- 阅读亮度：黑色薄幕，只压正文与页面底色，不挡菜单/弹窗（z-index 低于 chrome）。 -->
-    <div
-      v-if="dimOpacity > 0"
-      class="reader__dim"
-      :style="{ opacity: dimOpacity }"
-      aria-hidden="true"
-    />
+    <div v-if="dimOpacity > 0" class="reader__dim" :style="{ opacity: dimOpacity }" aria-hidden="true" />
 
     <div v-if="paginating" class="reader__fetch">
       <LoadingDots />
@@ -1863,7 +1938,9 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       class="reader__listen-fab"
       aria-label="听书"
       @click.stop="startListening"
-    >听</button>
+    >
+      听
+    </button>
 
     <!--
       Footer: WeRead leaves the left end blank and puts the position on the
@@ -1882,26 +1959,26 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
     <template v-if="showMenu">
       <ReaderTopBar
         :note-count="ideaCount"
-        @back="router.back()"
-        @notes="activePanel = 'notes'"
+        @back="handleBack"
+        @notes="handleOpenNotes"
         @search="openBookSearch"
         @share="shareExcerpt"
-        @more="showBookMenu = true"
+        @more="handleOpenBookMenu"
       />
       <ReaderBottomBar
         v-if="!listenExpanded"
         :active="activePanel"
         :note-count="noteCount"
-        @catalog="showCatalog = true"
+        @catalog="handleOpenCatalog"
         @panel="setPanel"
       />
       <FontPanel
         v-if="activePanel === 'font'"
         :auto-paging="autoPaging"
         @auto="toggleAutoPaging"
-        @close="activePanel = 'none'"
+        @close="handleClosePanel"
       />
-      <ThemePanel v-if="activePanel === 'theme'" @close="activePanel = 'none'" />
+      <ThemePanel v-if="activePanel === 'theme'" @close="handleClosePanel" />
       <ProgressPanel
         v-if="activePanel === 'progress'"
         :percent="percentText"
@@ -1913,7 +1990,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
         :auto-paging="autoPaging"
         @jump="jumpToChapter"
         @auto="toggleAutoPaging"
-        @close="activePanel = 'none'"
+        @close="handleClosePanel"
       />
       <NotesPanel
         v-if="activePanel === 'notes'"
@@ -1929,23 +2006,25 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
         @toggle="toggleBookmark"
         @remove="removeBookmark"
         @remove-highlight="deleteHighlight"
-        @stats="activePanel = 'progress'"
-        @close="activePanel = 'none'"
+        @stats="handleOpenProgress"
+        @close="handleClosePanel"
       />
     </template>
 
     <!-- 更多 menu: book-level actions that have nowhere else to live. -->
-    <div v-if="showBookMenu" class="reader-mask" @click.self="showBookMenu = false">
+    <div v-if="showBookMenu" class="reader-mask" @click.self="handleCloseBookMenu">
       <div class="reader-sheet">
         <div class="reader-sheet__head">
           <span class="reader-sheet__title">{{ book?.title || '' }}</span>
           <span class="reader-sheet__meta">{{ book?.author || '未知作者' }}</span>
         </div>
-        <button class="reader-sheet__item" @click="jumpToChapter(0); showBookMenu = false">回到开头</button>
-        <button class="reader-sheet__item" @click="showCatalog = true; showBookMenu = false">查看目录</button>
+        <button class="reader-sheet__item" @click="handleRestartReading">回到开头</button>
+        <button class="reader-sheet__item" @click="handleOpenCatalogFromMenu">查看目录</button>
         <button class="reader-sheet__item reader-sheet__item--danger" @click="leaveReader">移出阅读</button>
         <div class="reader-sheet__gap" />
-        <button class="reader-sheet__item reader-sheet__item--cancel" @click="showBookMenu = false">取消</button>
+        <button class="reader-sheet__item reader-sheet__item--cancel" @click="handleCloseBookMenu">
+          取消
+        </button>
       </div>
     </div>
 
@@ -1954,9 +2033,9 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       :chapters="chapterList"
       :current="currentChapter"
       :page-of="chapterPage"
-      @close="showCatalog = false"
+      @close="handleCloseCatalog"
       @jump="jumpToChapter"
-      @bookmark="toggleBookmark(); showCatalog = false"
+      @bookmark="handleBookmarkFromCatalog"
     />
 
     <BookSearchPanel
@@ -1966,7 +2045,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       :searching="searchRunning"
       :cached="searchableChapters.length"
       :total="chapterList.length"
-      @update:query="searchQuery = $event"
+      @update:query="handleSearchQuery"
       @jump="jumpToSearchHit"
       @close="closeBookSearch"
     />
@@ -2012,10 +2091,10 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
       :buffer-done="listenBuffer.done"
       :buffer-total="listenBuffer.total"
       :load-voices="listen.voices"
-      @toggle="listen.toggle()"
-      @prev="listen.prev()"
-      @next="listen.next()"
-      @seek="(i) => listen.seek(i)"
+      @toggle="handleListenToggle"
+      @prev="handleListenPrev"
+      @next="handleListenNext"
+      @seek="handleListenSeek"
       @rate="setListenRate"
       @voice="setListenVoice"
       @follow="toggleListenFollow"
@@ -2049,8 +2128,9 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   position: relative;
   height: 100%;
   background: var(--bg);
-  transition: background-color var(--page-duration) var(--page-easing),
-              color var(--page-duration) var(--page-easing);
+  transition:
+    background-color var(--page-duration) var(--page-easing),
+    color var(--page-duration) var(--page-easing);
   overflow: hidden;
   /*
    * Text is selectable: long-press → 划线/想法 is core WeRead behaviour. The
@@ -2138,7 +2218,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   height: 12px;
   margin: -6px 0 0 -6px;
   border-radius: 50%;
-  background: #34C759;
+  background: #34c759;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 .sel-handle--end {
@@ -2166,7 +2246,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   color: var(--text-body);
   column-fill: auto;
   column-count: 1;
-  transition: transform .22s cubic-bezier(.25,.1,.25,1);
+  transition: transform 0.22s cubic-bezier(0.25, 0.1, 0.25, 1);
   will-change: transform;
   word-break: break-word;
   /* Justify is right for CJK (even glyph widths) but produces rivers of
@@ -2238,9 +2318,15 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   border-radius: 2px;
 }
 /* 四色划线；blue 走上面的默认规则，其余各有自己的底色。 */
-.reader__pages :deep(mark.reader__hl--yellow) { background: rgba(255, 193, 7, 0.38); }
-.reader__pages :deep(mark.reader__hl--green) { background: rgba(52, 199, 89, 0.3); }
-.reader__pages :deep(mark.reader__hl--pink) { background: rgba(255, 45, 85, 0.22); }
+.reader__pages :deep(mark.reader__hl--yellow) {
+  background: rgba(255, 193, 7, 0.38);
+}
+.reader__pages :deep(mark.reader__hl--green) {
+  background: rgba(52, 199, 89, 0.3);
+}
+.reader__pages :deep(mark.reader__hl--pink) {
+  background: rgba(255, 45, 85, 0.22);
+}
 .reader__pages :deep(img) {
   max-width: 100%;
   /* A tall illustration taller than the page box can never fit a column and
@@ -2319,8 +2405,12 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
 }
 
 @keyframes loadingIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .reader__status {
   position: absolute;
@@ -2342,7 +2432,7 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   background: transparent;
   pointer-events: none;
   opacity: 1;
-  transition: opacity .2s;
+  transition: opacity 0.2s;
 }
 
 /*
@@ -2358,7 +2448,9 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 62%);
   mask-image: linear-gradient(to bottom, transparent, #000 62%);
 }
-.reader__status--hidden { opacity: 0; }
+.reader__status--hidden {
+  opacity: 0;
+}
 .reader-mask {
   position: fixed;
   inset: 0;
@@ -2370,8 +2462,12 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
 }
 
 @keyframes maskIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .reader-sheet {
@@ -2383,8 +2479,12 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
 }
 
 @keyframes sheetUp {
-  from { transform: translate3d(0, 100%, 0); }
-  to { transform: translate3d(0, 0, 0); }
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .reader-sheet__head {
@@ -2421,11 +2521,23 @@ function setPanel(p: Exclude<ReaderPanel, 'none'>) {
   background: var(--bg-panel);
 }
 
-.reader-sheet__item:first-of-type { border-radius: 12px 12px 0 0; }
-.reader-sheet__item:last-of-type { border-radius: 0 0 12px 12px; }
-.reader-sheet__item--danger { color: #e64340; }
-.reader-sheet__item--cancel { border-radius: 12px; font-weight: 500; margin-top: 8px; }
-.reader-sheet__gap { height: 8px; }
+.reader-sheet__item:first-of-type {
+  border-radius: 12px 12px 0 0;
+}
+.reader-sheet__item:last-of-type {
+  border-radius: 0 0 12px 12px;
+}
+.reader-sheet__item--danger {
+  color: #e64340;
+}
+.reader-sheet__item--cancel {
+  border-radius: 12px;
+  font-weight: 500;
+  margin-top: 8px;
+}
+.reader-sheet__gap {
+  height: 8px;
+}
 
 .reader__status-left {
   max-width: 60%;

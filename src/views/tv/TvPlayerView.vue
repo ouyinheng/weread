@@ -774,6 +774,32 @@ onBeforeUnmount(() => {
   if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
   destroyPlayer()
 })
+
+/* ---- 模板事件 ---- */
+function handleBackOrExit(): void {
+  if (isFull.value) void exitFull()
+  else goBack()
+}
+
+function handleOpenCast(): void {
+  castOpen.value = true
+}
+
+function handleCloseCast(): void {
+  castOpen.value = false
+}
+
+function handleToggleRate(): void {
+  rateOpen.value = !rateOpen.value
+}
+
+function handleNext(): void {
+  next()
+}
+
+function handlePickEpisode(row: { index: number }): void {
+  pickEpisode(row.index)
+}
 </script>
 
 <template>
@@ -805,7 +831,7 @@ onBeforeUnmount(() => {
           <button
             class="tv-play__ico"
             :aria-label="isFull ? '退出全屏' : '返回'"
-            @click.stop="isFull ? exitFull() : goBack()"
+            @click.stop="handleBackOrExit"
           >
             <Icon name="back" :size="22" :width="2" />
           </button>
@@ -818,7 +844,7 @@ onBeforeUnmount(() => {
           <span class="tv-play__top-gap" />
 
           <!-- 本地文件是 blob URL，电视端拿不到，投屏按钮只在点播模式出现。 -->
-          <button v-if="!localMode" class="tv-play__ico" aria-label="投屏" @click.stop="castOpen = true">
+          <button v-if="!localMode" class="tv-play__ico" aria-label="投屏" @click.stop="handleOpenCast">
             <svg
               width="21"
               height="21"
@@ -859,7 +885,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <span class="tv-play__time">{{ clock(duration) }}</span>
-          <button class="tv-play__txt" @click.stop="rateOpen = !rateOpen">倍速</button>
+          <button class="tv-play__txt" @click.stop="handleToggleRate">倍速</button>
           <button class="tv-play__ico" aria-label="全屏" @click.stop="toggleFullscreen">
             <Icon name="expand" :size="20" />
           </button>
@@ -896,7 +922,7 @@ onBeforeUnmount(() => {
             <button class="tv-play__ico" :aria-label="playing ? '暂停' : '播放'" @click.stop="togglePlay">
               <MorphIcon :name="playing ? 'pause' : 'play'" :size="22" :width="2.1" />
             </button>
-            <button v-if="hasNext" class="tv-play__ico" aria-label="下一集" @click.stop="next()">
+            <button v-if="hasNext" class="tv-play__ico" aria-label="下一集" @click.stop="handleNext">
               <Icon name="skip-forward" :size="21" />
             </button>
 
@@ -942,12 +968,12 @@ onBeforeUnmount(() => {
 
             <span class="tv-play__row-gap" />
 
-            <button class="tv-play__txt" @click.stop="rateOpen = !rateOpen">倍速</button>
+            <button class="tv-play__txt" @click.stop="handleToggleRate">倍速</button>
             <button
               v-if="showCast && !localMode"
               class="tv-play__ico tv-play__ico--sm"
               aria-label="投屏"
-              @click.stop="castOpen = true"
+              @click.stop="handleOpenCast"
             >
               <svg
                 width="19"
@@ -1059,7 +1085,7 @@ onBeforeUnmount(() => {
           一块黑。竖屏时 `position:fixed` 仍按视口铺满整页（overflow:hidden 不裁
           fixed 后代），全屏时切成 absolute 盖住整个屏幕元素。
         -->
-        <CastSheet ref="castSheet" :open="castOpen" @close="castOpen = false" @cast="pickCast" />
+        <CastSheet ref="castSheet" :open="castOpen" @close="handleCloseCast" @cast="pickCast" />
 
         <!-- 选集抽屉：线路切换 + 剧集列表 -->
         <div v-if="drawerOpen" class="tv-play__mask" @click="closeDrawer">
@@ -1087,7 +1113,7 @@ onBeforeUnmount(() => {
                 :key="row.ep.url"
                 class="tv-play__drawer-ep"
                 :class="{ 'tv-play__drawer-ep--active': row.index === epIndex }"
-                @click="pickEpisode(row.index)"
+                @click="handlePickEpisode(row)"
               >
                 {{ row.ep.name }}
               </button>
@@ -1160,7 +1186,7 @@ onBeforeUnmount(() => {
               :class="{ 'tv-play__ep-btn--active': row.index === epIndex }"
               :aria-label="row.ep.name"
               :aria-current="row.index === epIndex ? 'true' : undefined"
-              @click="pickEpisode(row.index)"
+              @click="handlePickEpisode(row)"
             >
               <!-- 正在播的那一格：参考图是三根橙红竖条（均衡器）压在浅粉底上 -->
               <span v-if="row.index === epIndex" class="tv-play__ep-eq" aria-hidden="true">

@@ -49,8 +49,16 @@ withDefaults(defineProps<{ label?: string; light?: boolean }>(), {
 }
 
 @keyframes dotPulse {
-  0%, 70%, 100% { transform: translateY(0); opacity: 0.45; }
-  35% { transform: translateY(-5px); opacity: 1; }
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  35% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

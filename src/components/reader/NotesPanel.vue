@@ -97,7 +97,7 @@ const rows = computed<NoteRow[]>(() => {
   const q = searchQuery.value.trim()
   if (!q) return list
   return list.filter(
-    r => r.text.includes(q) || r.note.includes(q) || chapterTitle(r.chapterIndex).includes(q)
+    r => r.text.includes(q) || r.note.includes(q) || chapterTitle(r.chapterIndex).includes(q),
   )
 })
 
@@ -108,8 +108,20 @@ const rows = computed<NoteRow[]>(() => {
  */
 const actions = computed<{ icon: IconName; label: string; run: () => void }[]>(() => [
   { icon: 'bookmark', label: props.isBookmarked ? '取消书签' : '添加书签', run: () => emit('toggle') },
-  { icon: 'search', label: '搜索笔记', run: () => { searchOpen.value = !searchOpen.value } },
-  { icon: 'share', label: '导出笔记', run: () => { void exportNotes() } },
+  {
+    icon: 'search',
+    label: '搜索笔记',
+    run: () => {
+      searchOpen.value = !searchOpen.value
+    },
+  },
+  {
+    icon: 'share',
+    label: '导出笔记',
+    run: () => {
+      void exportNotes()
+    },
+  },
   { icon: 'progress', label: '阅读统计', run: () => emit('stats') },
 ])
 
@@ -183,10 +195,14 @@ function chapterTitle(index: number): string {
 /** 划线的底色，列表里用同色小圆点标记。 */
 function colorCss(color?: HighlightColor): string {
   switch (color) {
-    case 'yellow': return 'rgba(255, 193, 7, 0.75)'
-    case 'green': return 'rgba(52, 199, 89, 0.6)'
-    case 'pink': return 'rgba(255, 45, 85, 0.55)'
-    default: return 'rgba(27, 136, 238, 0.6)'
+    case 'yellow':
+      return 'rgba(255, 193, 7, 0.75)'
+    case 'green':
+      return 'rgba(52, 199, 89, 0.6)'
+    case 'pink':
+      return 'rgba(255, 45, 85, 0.55)'
+    default:
+      return 'rgba(27, 136, 238, 0.6)'
   }
 }
 
@@ -195,10 +211,53 @@ function formatDate(ts: number): string {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
+
+/* ---- 模板事件 ---- */
+function handleClose(): void {
+  emit('close')
+}
+
+function handleShowNotes(): void {
+  tab.value = 'notes'
+}
+
+function handleShowPopular(): void {
+  tab.value = 'popular'
+}
+
+function handleCloseSearch(): void {
+  searchOpen.value = false
+}
+
+function handleClearSearch(): void {
+  searchOpen.value = false
+  searchQuery.value = ''
+}
+
+function handleStats(): void {
+  emit('stats')
+}
+
+function handleJump(row: NoteRow): void {
+  emit('jump', row.chapterIndex, row.charOffset)
+}
+
+function handleRemove(row: NoteRow): void {
+  if (row.kind === 'highlight') emit('removeHighlight', row.id)
+  else emit('remove', row.id)
+}
+
+function handleToggle(): void {
+  emit('toggle')
+}
+
+function handleAction(a: { run: () => void }): void {
+  a.run()
+}
 </script>
 
 <template>
-  <div class="notes-mask" @click.self="emit('close')">
+  <div class="notes-mask" @click.self="handleClose">
     <div class="notes">
       <div class="notes__grabber" />
 
@@ -207,20 +266,24 @@ function formatDate(ts: number): string {
         <button
           class="notes__segment"
           :class="{ 'notes__segment--on': tab === 'notes' }"
-          @click="tab = 'notes'"
-        >笔记</button>
+          @click="handleShowNotes"
+        >
+          笔记
+        </button>
         <button
           class="notes__segment"
           :class="{ 'notes__segment--on': tab === 'popular' }"
-          @click="tab = 'popular'"
-        >热门划线</button>
+          @click="handleShowPopular"
+        >
+          热门划线
+        </button>
       </div>
 
       <!-- Search field appears only when the user asks for it. -->
       <div v-if="searchOpen" class="notes__search">
         <Icon name="search" :size="15" />
-        <input v-model="searchQuery" placeholder="搜索摘录或章节名" @keydown.esc="searchOpen = false" />
-        <button class="notes__search-close" @click="searchOpen = false; searchQuery = ''">
+        <input v-model="searchQuery" placeholder="搜索摘录或章节名" @keydown.esc="handleCloseSearch" />
+        <button class="notes__search-close" @click="handleClearSearch">
           <Icon name="close" :size="15" />
         </button>
       </div>
@@ -238,7 +301,7 @@ function formatDate(ts: number): string {
               <span class="notes__meta-line">
                 <Icon name="sort-down" :size="15" />
                 <span>时长 {{ readingTimeText || '不足 1 分钟' }}</span>
-                <button class="notes__link" @click="emit('stats')">阅读明细</button>
+                <button class="notes__link" @click="handleStats">阅读明细</button>
               </span>
             </div>
             <!-- Real cover when the book carries one; the generated chip otherwise,
@@ -250,7 +313,7 @@ function formatDate(ts: number): string {
           </div>
 
           <div class="notes__actions">
-            <button v-for="a in actions" :key="a.label" class="notes__action" @click="a.run">
+            <button v-for="a in actions" :key="a.label" class="notes__action" @click="handleAction(a)">
               <Icon :name="a.icon" :size="22" />
               <span>{{ a.label }}</span>
             </button>
@@ -260,25 +323,23 @@ function formatDate(ts: number): string {
         <!-- Saved notes: bookmarks and 划线/想法, newest first -->
         <div v-if="tab === 'notes' && rows.length" class="notes__list">
           <div v-for="row in rows" :key="row.id" class="notes__row">
-            <button class="notes__row-main" @click="emit('jump', row.chapterIndex, row.charOffset)">
+            <button class="notes__row-main" @click="handleJump(row)">
               <span class="notes__row-chapter">
                 <i
                   v-if="row.kind === 'highlight'"
                   class="notes__row-dot"
                   :style="{ background: colorCss(row.color) }"
                 />
-                <i v-if="row.kind === 'highlight'" class="notes__row-kind">{{ row.note ? '想法' : '划线' }}</i>
+                <i v-if="row.kind === 'highlight'" class="notes__row-kind">{{
+                  row.note ? '想法' : '划线'
+                }}</i>
                 {{ chapterTitle(row.chapterIndex) }}
               </span>
               <span class="notes__row-excerpt">{{ row.text }}</span>
               <span v-if="row.note" class="notes__row-note">{{ row.note }}</span>
               <span class="notes__row-time">{{ formatDate(row.createdAt) }}</span>
             </button>
-            <button
-              class="notes__row-del"
-              aria-label="删除"
-              @click="row.kind === 'highlight' ? emit('removeHighlight', row.id) : emit('remove', row.id)"
-            >
+            <button class="notes__row-del" aria-label="删除" @click="handleRemove(row)">
               <Icon name="close" :size="16" />
             </button>
           </div>
@@ -286,13 +347,9 @@ function formatDate(ts: number): string {
 
         <!-- Empty states, one per tab -->
         <div v-else class="notes__card notes__empty">
-          <p v-if="tab === 'notes'">
-            你可以在这里记录本书的<br />想法、划线、书签
-          </p>
-          <p v-else>
-            这本书还没有热门划线<br />本地书籍不联网，暂无社区划线
-          </p>
-          <button class="notes__link" @click="emit('toggle')">
+          <p v-if="tab === 'notes'">你可以在这里记录本书的<br />想法、划线、书签</p>
+          <p v-else>这本书还没有热门划线<br />本地书籍不联网，暂无社区划线</p>
+          <button class="notes__link" @click="handleToggle">
             {{ isBookmarked ? '查看我的全部笔记' : '添加第一条书签' }}
           </button>
         </div>
@@ -313,8 +370,12 @@ function formatDate(ts: number): string {
 }
 
 @keyframes maskIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .notes {
@@ -329,8 +390,12 @@ function formatDate(ts: number): string {
 }
 
 @keyframes sheetUp {
-  from { transform: translate3d(0, 100%, 0); }
-  to { transform: translate3d(0, 0, 0); }
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .notes__grabber {
@@ -358,7 +423,10 @@ function formatDate(ts: number): string {
   border-radius: 17px;
   font-size: calc(14px * var(--app-font-scale));
   color: var(--text-secondary);
-  transition: background-color 160ms, color 160ms, box-shadow 160ms;
+  transition:
+    background-color 160ms,
+    color 160ms,
+    box-shadow 160ms;
 }
 
 .notes__segment--on {

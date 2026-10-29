@@ -32,7 +32,7 @@ const props = withDefaults(
     /** Stroke width; 1.7 is the app default, same as Icon. */
     width?: number
   }>(),
-  { size: 22, width: 1.7 }
+  { size: 22, width: 1.7 },
 )
 
 const icon = computed(() => PATHS[props.name])

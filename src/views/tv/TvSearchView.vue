@@ -42,7 +42,14 @@ onMounted(async () => {
   // 只在没有关键词时自动聚焦，避免从详情页返回就弹键盘。
   if (!q) {
     await nextTick()
-    inputEl.value?.focus()
+    /*
+     * 等滑入动画走完再要键盘。
+     *
+     * 立刻 focus 会让软键盘在页面还在 translate 的时候顶起来，WebView 随之
+     * 改变可视高度并触发重排，动画就断成一下一下的抽搐。280ms 是 push 过渡
+     * 的时长，用户感知上仍然是「进来就能打字」。书架那边的搜索页同理。
+     */
+    window.setTimeout(() => inputEl.value?.focus(), 280)
     return
   }
   await nextTick()

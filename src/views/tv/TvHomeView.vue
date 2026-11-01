@@ -435,12 +435,6 @@ function handleRetry(): void {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tv__pull-spin--on {
-    animation-duration: 2s;
-  }
-}
-
 .tv__empty {
   display: flex;
   flex-direction: column;

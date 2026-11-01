@@ -17,6 +17,7 @@ import { useSourceStore } from '@/stores/source'
 import type { AppTheme } from '@/types'
 import { fontLabelOf } from '@/utils/fonts'
 import Icon from '@/components/Icon.vue'
+import CapsuleSlider from '@/components/CapsuleSlider.vue'
 import { pickAndImport } from '@/utils/importer'
 import { alertDialog, confirmDialog } from '@/utils/dialog'
 import { isNativeShell } from '@/utils/native'
@@ -43,13 +44,24 @@ function setAppTheme(id: AppTheme): void {
 }
 
 /** 拖动时先实时改 CSS 变量，松手再落库，避免每移动一点就写一次 IndexedDB。 */
-function previewFontScale(e: Event): void {
-  appSettings.app.fontScale = Number((e.target as HTMLInputElement).value)
+function previewFontScale(pct: number): void {
+  appSettings.app.fontScale = Math.round(pct) / 100
   appSettings.apply()
 }
 
 function saveFontScale(): void {
   void appSettings.update({ fontScale: appSettings.app.fontScale })
+}
+
+/* ---- 模板事件 ---- */
+/** 拖动时实时预览（不落库），松手再存。 */
+function handleFontScaleInput(pct: number): void {
+  previewFontScale(pct)
+}
+
+function handleFontScaleCommit(pct: number): void {
+  previewFontScale(pct)
+  saveFontScale()
 }
 
 const appVersion = __APP_VERSION__
@@ -370,20 +382,22 @@ function handlePickImport(): void {
           <div class="settings-row settings-row--scale">
             <span class="settings-label">字体大小</span>
             <div class="font-scale">
-              <span class="font-scale__a font-scale__a--small">A</span>
-              <input
-                class="font-scale__slider"
-                type="range"
-                min="0.85"
-                max="1.35"
-                step="0.05"
-                :value="app.fontScale"
-                aria-label="界面字体大小"
-                @input="previewFontScale"
-                @change="saveFontScale"
-              />
-              <span class="font-scale__a font-scale__a--large">A</span>
-              <span class="font-scale__value">{{ Math.round(app.fontScale * 100) }}%</span>
+              <CapsuleSlider
+                :min="85"
+                :max="135"
+                :step="5"
+                :value="Math.round(app.fontScale * 100)"
+                :thumb-label="`${Math.round(app.fontScale * 100)}%`"
+                @update:value="handleFontScaleInput"
+                @change="handleFontScaleCommit"
+              >
+                <template #min>
+                  <span class="font-scale__a font-scale__a--small">A</span>
+                </template>
+                <template #max>
+                  <span class="font-scale__a font-scale__a--large">A</span>
+                </template>
+              </CapsuleSlider>
             </div>
           </div>
 
@@ -746,9 +760,6 @@ function handlePickImport(): void {
 .font-scale {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .font-scale__a {
@@ -762,13 +773,6 @@ function handlePickImport(): void {
 
 .font-scale__a--large {
   font-size: calc(18px * var(--app-font-scale));
-}
-
-.font-scale__slider {
-  flex: 1;
-  min-width: 0;
-  height: 20px;
-  accent-color: var(--accent);
 }
 
 .font-scale__value {

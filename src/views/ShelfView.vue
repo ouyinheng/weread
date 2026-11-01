@@ -6,8 +6,6 @@ import type { Book } from '@/types'
 import BookCover from '@/components/BookCover.vue'
 import Icon from '@/components/Icon.vue'
 import LoadingDots from '@/components/LoadingDots.vue'
-import { openBookTransition } from '@/utils/open-book-transition'
-import type { SharedElementHandle } from '@/utils/open-book-transition'
 import { pickAndImport } from '@/utils/importer'
 import { confirmDialog } from '@/utils/dialog'
 import { uiState } from '@/utils/ui-state'
@@ -16,7 +14,6 @@ import { uiState } from '@/utils/ui-state'
 defineOptions({ name: 'shelf' })
 
 /** In-flight open animation; cancelled if the user taps another book. */
-let openAnim: SharedElementHandle | null = null
 
 const router = useRouter()
 const store = useBookStore()
@@ -91,33 +88,14 @@ onBeforeUnmount(() => {
 })
 
 /**
- * Open a book with the standard "cover grows into the page" motion.
+ * 点封面直接打开。
  *
- * The navigation is issued immediately and runs *under* the flying clone, so
- * the reader is already rendering when the cover lands — that is what keeps the
- * handoff free of a blank frame.
+ * 以前这里有一层「封面飞出来变成整页」的共享元素动画，但它要读封面在屏幕
+ * 上的位置、再重建一张卡片做缩放，书架上任何布局变化都会让它对不齐（第二、
+ * 三列的书会飞偏），而收益只是一个 300ms 的花活。现在直接跳转。
  */
-function openBook(id: string, event?: MouseEvent) {
-  const item = (event?.currentTarget as HTMLElement | null)?.closest('.shelf__item')
-  const coverEl = item?.querySelector('.shelf__cover') as HTMLElement | null
-
-  openAnim?.cancel()
-
-  const anim = openBookTransition(coverEl, {
-    background: 'var(--bg-page)',
-    duration: 320,
-    // Navigate once the card covers the viewport: the router swap then happens
-    // behind the animation instead of competing with its first frames.
-    onCovered: () => router.push({ name: 'reader', params: { id } }),
-  })
-  openAnim = anim
-
-  // No animation available (reduced motion / no cover node): navigate directly.
-  if (!anim) router.push({ name: 'reader', params: { id } })
-
-  anim?.done.then(() => {
-    if (openAnim === anim) openAnim = null
-  })
+function openBook(id: string) {
+  void router.push({ name: 'reader', params: { id } })
 }
 
 /**
@@ -223,9 +201,9 @@ function handlePickSort(t: { key: SortKey }): void {
   sortKey.value = t.key
 }
 
-function handleBookClick(book: Book, e: MouseEvent): void {
+function handleBookClick(book: Book): void {
   if (selectMode.value) toggleSelected(book.id)
-  else openBook(book.id, e)
+  else openBook(book.id)
 }
 
 function handleCloseMenu(): void {
@@ -299,7 +277,7 @@ function handleRestartBook(book: Book): void {
           :key="book.id"
           class="shelf__item"
           :class="{ 'shelf__item--selected': selected.has(book.id) }"
-          @click="handleBookClick(book, $event)"
+          @click="handleBookClick(book)"
           @touchstart.passive="onItemPressStart(book)"
           @touchend.passive="onItemPressEnd"
           @touchmove.passive="onItemPressEnd"

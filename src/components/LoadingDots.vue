@@ -61,10 +61,4 @@ withDefaults(defineProps<{ label?: string; light?: boolean }>(), {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dots__dot {
-    animation: none;
-    opacity: 0.7;
-  }
-}
 </style>

@@ -48,7 +48,7 @@ try {
      contrast), so assert the token is one of the two rather than a literal. */
   check(
     'accent resolves to a brand step',
-    ['#0e6fc7', '#4aa3f5'].includes(tokens.accent.toLowerCase()),
+    ['#3e6bf0', '#7d9bff'].includes(tokens.accent.toLowerCase()),
     tokens.accent
   )
   check('page canvas token set', !!tokens.page, JSON.stringify(tokens))

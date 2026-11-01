@@ -349,7 +349,17 @@ onBeforeUnmount(() => {
   transition: background-color var(--page-duration) var(--page-easing);
 }
 
+/*
+ * 所有页面都绝对定位叠在视口里。
+ *
+ * 之前只有 tab 页是绝对的，push 进来的页（搜索、设置）是普通流：于是滑入时
+ * 「绝对定位的旧页」会盖在「正常流的新的页」上面（定位元素在流元素之上），
+ * 再叠上两边同时做 opacity 淡入淡出，看起来就是两页文字互相打架的抽搐。
+ * 统一成绝对定位后，绘制顺序按 DOM 顺序走——新页在后面，压在旧页之上。
+ */
 .app__viewport > * {
+  position: absolute;
+  inset: 0;
   height: 100%;
 }
 

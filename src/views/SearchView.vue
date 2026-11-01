@@ -67,7 +67,14 @@ onMounted(async () => {
   await sourceStore.load()
   sourceStore.clearResults()
   await nextTick()
-  inputEl.value?.focus()
+  /*
+   * 等滑入动画结束再要键盘。
+   *
+   * 立刻 focus 会在页面还在 translate 的时候弹出软键盘，WebView 随之改变
+   * 可视高度、再触发一次重排，动画被打断成一下一下的抽搐。260ms 是 push
+   * 过渡的时长，稍晚一点点，用户感知仍然是「进来就能打字」。
+   */
+  window.setTimeout(() => inputEl.value?.focus(), 280)
 })
 
 watch(query, v => {

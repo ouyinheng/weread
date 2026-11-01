@@ -102,16 +102,15 @@ function handleSelectTab(tab: { name: string }): void {
   color: var(--accent);
 }
 
+/*
+ * 图标不做按下缩放：这里的反馈由「描边弹成实心」（morphicons）和文字变色给，
+ * 再叠一个 scale 会显得整条 tab 在抖。
+ */
 .tabbar__icon {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 26px;
-  transition: transform 120ms ease-out;
-}
-
-.tabbar__item:active .tabbar__icon {
-  transform: scale(0.9);
 }
 
 .tabbar__label {

@@ -625,7 +625,13 @@ let resizeObserver: ResizeObserver | null = null
 
 // Available page box = viewport box minus page margins, in CSS px.
 // `gap` is the inter-column gutter and must be included in the page stride.
-const pageBox = ref({ w: 320, h: 600, gap: 44 })
+/**
+ * 一页的版面盒子。
+ *
+ * `lh` 是**实际使用的行高**（px）：它不一定等于 `字号 × 行距`，而是把
+ * 「页面高度除以整行数」后的余量摊到每一行里——见 measureViewport。
+ */
+const pageBox = ref({ w: 320, h: 600, gap: 44, lh: 0 })
 
 function measureViewport() {
   const vp = viewportEl.value
@@ -636,11 +642,20 @@ function measureViewport() {
   const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
   const gap = settings.value.pageMargin * 2
   const w = Math.max(160, Math.round(r.width - padX))
+  const raw = Math.max(200, r.height - padY)
+  const want = Math.max(1, settings.value.fontSize * settings.value.lineHeight)
+  /*
+   * 整行数 × 行高 才是能放的文字高度，但那样会让页面底部最多空掉将近一整行
+   * （大字号大行距时肉眼就是一截白）。这里改成：行数取整后，把余量均摊到
+   * 每一行——行距变化最多 1/行数（通常 3–8%），看不出来，但正文能贴到页面
+   * 底边。再留 1px 余量，避免亚像素把最后一行切掉。
+   */
+  const lines = Math.max(1, Math.floor(raw / want))
   pageBox.value = {
     w,
-    // Whole lines only — a fractional box slices the last line in half.
-    h: snapPageHeight(Math.max(200, r.height - padY)),
+    h: Math.round(raw),
     gap,
+    lh: (raw - 1) / lines,
   }
 }
 
@@ -674,17 +689,16 @@ const readerSurface = computed(() => {
  * the line height slices the last line in half. We also need the *painted*
  * height (a whole number of lines) for page-stride math.
  */
-const lineHeightPx = computed(() => {
-  const fs = settings.value.fontSize
-  return fs * settings.value.lineHeight
+/**
+ * 绑定给 `.reader__pages` 的 line-height。
+ *
+ * 无单位倍数才能跟 `font-size` 一起缩放；翻页模式用摊过余量的实际行高，
+ * 滚动模式就用用户设定的行距。
+ */
+const pagesLineHeight = computed(() => {
+  const fs = Math.max(1, settings.value.fontSize)
+  return pageBox.value.lh > 0 && !isScrollMode.value ? pageBox.value.lh / fs : settings.value.lineHeight
 })
-
-function snapPageHeight(raw: number): number {
-  const lh = lineHeightPx.value
-  if (!lh || !isFinite(lh) || lh <= 0) return Math.max(200, Math.round(raw))
-  const lines = Math.max(1, Math.floor(raw / lh))
-  return Math.round(lines * lh)
-}
 
 /** Horizontal distance between two columns. */
 const columnStride = computed(() => pageBox.value.w + pageBox.value.gap)
@@ -1508,6 +1522,8 @@ const readingTimeText = computed(() => formatDuration(readingMs.value))
  */
 const autoPaging = ref(false)
 let autoTimer: ReturnType<typeof setInterval> | null = null
+/** 距离下一次自动翻页还有几秒；页脚用它显示「自动 12s」。 */
+const autoLeft = ref(0)
 /** 自动翻页间隔可调；旧设置没有这个字段时按 20 秒。 */
 const autoPageMs = computed(() => Math.max(3, Math.round(settings.value.autoPageSeconds || 20)) * 1000)
 
@@ -1521,17 +1537,32 @@ function toggleAutoPaging() {
   }
 }
 
+/**
+ * 自动翻页的节拍器。
+ *
+ * 用 1 秒一跳自己数秒，而不是 `setInterval(间隔)` 直接翻页：这样页脚能显示
+ * 「自动 12s」，用户点开就知道它在跑（之前的实现没有任何反馈，很容易误以为
+ * 没生效）；面板打开时也只是暂停计数，不会把这段时间白算进去。
+ */
 function syncAutoTimer() {
   if (autoTimer) {
     clearInterval(autoTimer)
     autoTimer = null
   }
+  autoLeft.value = 0
   if (!autoPaging.value) return
+  const total = Math.max(3, Math.round(autoPageMs.value / 1000))
+  autoLeft.value = total
   autoTimer = setInterval(() => {
     if (showMenu.value || showBookMenu.value || showCatalog.value) return
     if (activePanel.value !== 'none') return
+    // 听书时不动页面：正文要跟着朗读走，自动翻页会和跟读抢。
+    if (listenActive.value) return
+    autoLeft.value -= 1
+    if (autoLeft.value > 0) return
+    autoLeft.value = total
     nextPage()
-  }, autoPageMs.value)
+  }, 1000)
 }
 
 // 改速度时如果正在自动翻页，立刻按新间隔重排定时器。
@@ -1547,6 +1578,9 @@ watch(autoPageMs, () => {
 const activeOverlayId = ref('')
 watch(
   () => {
+    // 全屏听书页盖在最上层：按返回先收起它，回到刚才那一页正文，
+    // 而不是一按就把整本书退掉。
+    if (listenExpanded.value) return 'reader:listen'
     if (showBookMenu.value) return 'reader:book-menu'
     if (showSearch.value) return 'reader:search'
     if (showCatalog.value) return 'reader:catalog'
@@ -1559,7 +1593,8 @@ watch(
     activeOverlayId.value = id
     if (!id) return
     openOverlay(id, () => {
-      if (id === 'reader:book-menu') showBookMenu.value = false
+      if (id === 'reader:listen') listen.collapse()
+      else if (id === 'reader:book-menu') showBookMenu.value = false
       else if (id === 'reader:search') closeBookSearch()
       else if (id === 'reader:catalog') showCatalog.value = false
       else if (id.startsWith('reader:panel:')) activePanel.value = 'none'
@@ -1590,6 +1625,11 @@ watch(
 )
 
 onMounted(async () => {
+  /*
+   * 进阅读页就把语音引擎热起来：本地神经音色要先把模型读进内存（2–4 秒），
+   * 这件事该发生在用户还在看书的时候，而不是点下「听」之后。
+   */
+  listen.prewarm()
   // The reader must be self-sufficient: a cold start (or a direct deep link)
   // has an empty book store, and relying on ShelfView to have populated it
   // silently loses the saved position.
@@ -1722,6 +1762,8 @@ function onVisibility() {
     sessionStart = 0
   } else {
     startSession()
+    // 后台时 WebView 可能把定时器冻结/清掉，回到前台按新间隔重排一次。
+    if (autoPaging.value) syncAutoTimer()
   }
 }
 
@@ -1888,7 +1930,7 @@ function handleListenSeek(i: number): void {
                 width: pageBox.w + 'px',
                 height: pageBox.h + 'px',
                 fontSize: settings.fontSize + 'px',
-                lineHeight: settings.lineHeight,
+                lineHeight: pagesLineHeight,
                 fontFamily: fontStackOf(settings.fontFamily),
                 columnWidth: pageBox.w + 'px',
                 columnGap: pageBox.gap + 'px',
@@ -1950,7 +1992,7 @@ function handleListenSeek(i: number): void {
       class="reader__status"
       :class="{ 'reader__status--hidden': showMenu || listenActive, 'reader__status--scroll': isScrollMode }"
     >
-      <span class="reader__status-left"></span>
+      <span class="reader__status-left">{{ autoPaging ? `自动翻页 ${autoLeft}s` : '' }}</span>
       <span class="reader__status-right">{{ percentText }}</span>
     </div>
 
@@ -2191,15 +2233,16 @@ function handleListenSeek(i: number): void {
   position: absolute;
   right: 14px;
   /* 只在工具栏显示时出现，所以要让开 52px 的底部栏。 */
-  bottom: calc(80px + var(--safe-bottom));
+  bottom: calc(84px + var(--safe-bottom));
   z-index: 40;
-  width: 44px;
-  height: 44px;
-  border-radius: 22px;
+  /* 44 是触控下限，但阅读页里这颗是整个听书的入口，视觉上要更显眼一点。 */
+  width: 52px;
+  height: 52px;
+  border-radius: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: calc(20px * var(--app-font-scale));
+  font-size: calc(23px * var(--app-font-scale));
   font-weight: 500;
   color: #fff;
   background: rgba(28, 28, 32, 0.62);

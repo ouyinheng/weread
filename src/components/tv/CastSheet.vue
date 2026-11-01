@@ -291,12 +291,6 @@ function handleClose(): void {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .cast__spinner {
-    animation-duration: 2s;
-  }
-}
-
 .cast__again {
   margin-top: 12px;
   min-height: 44px;

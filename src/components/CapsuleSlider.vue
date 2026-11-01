@@ -148,13 +148,19 @@ function onChange(e: Event) {
   min-width: 30px;
   padding: 0 7px;
   border-radius: 15px;
+  /* 纯白不透明：底下是轨道和两端标签，半透明会把字透上来。 */
   background: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  z-index: 1;
+  /*
+   * 拇指要盖住两端的 A / 小 / 大：那几个字是排版参照，被滑到上面时不能透出来
+   * （之前拇指 z-index 比标签低，字会叠在白色胶囊上）。拇指不接收事件，所以
+   * 盖住之后两端按钮依然点得到。
+   */
+  z-index: 3;
 }
 
 .capsule__thumb-label {

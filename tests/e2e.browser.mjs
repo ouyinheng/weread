@@ -158,19 +158,30 @@ try {
   check('reader restored chapter 2', (reader.status || '').includes('第2章'), reader.status)
   check('reader shows percent', /%$/.test(reader.percent || ''), reader.percent)
 
-  /* ---------- 6b. pagination geometry: whole lines, no clipped text ---------- */
+  /* ---------- 6b. pagination geometry: fills the page, no clipped text ---------- */
+  /*
+   * 版面用的是「整行数 + 把余量摊进行高」：页面盒占满可用高度，行高比设定值
+   * 略大一点点（<1 行/行数），这样底部不会空掉将近一整行。所以这里校验的是
+   * 「页面盒 = 可用高度」「行高接近设定值」「行数是整数」，而不是旧的
+   * 「高度正好是整行倍数」。
+   */
   const geom = await page.evaluate(`(() => {
     const el = document.querySelector('.reader__pages')
+    const vp = document.querySelector('.reader__viewport')
     const cs = getComputedStyle(el)
+    const vcs = getComputedStyle(vp)
     const lh = parseFloat(cs.lineHeight)
     const pageH = el.getBoundingClientRect().height
+    const availH = vp.getBoundingClientRect().height
+      - parseFloat(vcs.paddingTop) - parseFloat(vcs.paddingBottom)
     const w = parseFloat(cs.columnWidth)
     const gap = parseFloat(cs.columnGap)
     const pages = Math.round((el.scrollWidth + gap) / (w + gap))
-    return { pageH, lh, lines: pageH / lh, remainder: pageH % lh, w, gap, pages,
-             scrollW: el.scrollWidth }
+    return { pageH, availH, lh, lines: pageH / lh, w, gap, pages, scrollW: el.scrollWidth }
   })()`)
-  check('page height is a whole number of lines', Math.abs(geom.remainder) < 0.5 || Math.abs(geom.remainder - geom.lh) < 0.5,
+  check('page box fills the available height', Math.abs(geom.pageH - geom.availH) < 1.5,
+    JSON.stringify({ pageH: geom.pageH, availH: geom.availH }))
+  check('line count is a whole number', Math.abs(geom.lines - Math.round(geom.lines)) < 0.05,
     JSON.stringify(geom))
   check('page fits >= 10 full lines', geom.lines >= 10, geom.lines)
   check('column gap is part of the stride', geom.gap > 0, JSON.stringify({ w: geom.w, gap: geom.gap }))

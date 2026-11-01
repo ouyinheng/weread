@@ -344,12 +344,6 @@ function handleClose(): void {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .mini__spinner {
-    animation-duration: 2s;
-  }
-}
-
 .mini__btn:disabled {
   opacity: 0.35;
 }

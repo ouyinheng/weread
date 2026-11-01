@@ -63,16 +63,10 @@ try {
   check('种子数据写入', seeded)
 
   await page.goto(`${BASE}/shelf`, 1400)
-  // 必须走 SPA 内部跳转：整页加载会在 history.back() 时重载文档，会话自然没了。
-  const entered = await page.evaluate(`(async () => {
-    const item = document.querySelector('.shelf__item')
-    if (!item) return { error: 'no shelf item' }
-    item.click()
-    await new Promise(r => setTimeout(r, 1500))
-    return { route: location.pathname, reader: !!document.querySelector('.reader') }
-  })()`)
-  check('从书架进入阅读页', entered.route === '/reader/listen1' && entered.reader, JSON.stringify(entered))
-
+  /*
+   * 假引擎必须在**进阅读页之前**装好：进阅读页就会 prewarm，引擎实例那时
+   * 就把 `window.speechSynthesis` 抓走了，之后再替换这个对象已经晚了。
+   */
   await page.evaluate(`(() => {
     window.__spoken = 0
     const timers = new Set()
@@ -90,6 +84,16 @@ try {
     Object.defineProperty(window, 'speechSynthesis', { value: fake, configurable: true })
     return true
   })()`)
+
+  // 必须走 SPA 内部跳转：整页加载会在 history.back() 时重载文档，会话自然没了。
+  const entered = await page.evaluate(`(async () => {
+    const item = document.querySelector('.shelf__item')
+    if (!item) return { error: 'no shelf item' }
+    item.click()
+    await new Promise(r => setTimeout(r, 1500))
+    return { route: location.pathname, reader: !!document.querySelector('.reader') }
+  })()`)
+  check('从书架进入阅读页', entered.route === '/reader/listen1' && entered.reader, JSON.stringify(entered))
 
   const opened = await page.evaluate(`(async () => {
     const vp = document.querySelector('.reader__viewport')

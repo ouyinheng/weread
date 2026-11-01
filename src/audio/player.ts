@@ -366,10 +366,14 @@ export function useListenPlayer(deps: PlayerDeps) {
           if (my !== token) return
           // Cancellation is the user's own doing (pause / skip / exit).
           if (err instanceof TtsCancelled) return
-          // A network voice failing is not a broken phone engine; say so.
-          reason.value = err instanceof Error && err.message === 'edge-failed'
+          // Failures name their own cause: the network voice and the bundled
+          // model are not "the phone's engine is broken".
+          const code = err instanceof Error ? err.message : ''
+          reason.value = code === 'edge-failed'
             ? 'online-failed'
-            : 'engine-init-failed'
+            : code === 'sherpa-failed'
+              ? 'local-failed'
+              : 'engine-init-failed'
           status.value = 'unavailable'
           // Silence the chunk that was queued ahead, if any.
           void e.stop()

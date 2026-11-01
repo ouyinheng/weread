@@ -41,6 +41,30 @@ export interface TtsRangeEvent {
   end: number
 }
 
+/**
+ * On-device neural voices (sherpa-onnx).
+ *
+ * Unlike the system engine, this one keeps a single audio stream open and
+ * synthesises ahead of it, so `speak()` calls queue behind each other with no
+ * silence at the seam. `prepare()` loads the model (~2–4 s, once per process)
+ * and must be done before the first `speak()`.
+ */
+export interface NativeSherpaTtsPlugin {
+  isAvailable(): Promise<{ available: boolean; ready?: boolean; reason?: string }>
+  prepare(): Promise<{ ready: boolean; reason?: string }>
+  speak(o: { text: string; rate?: number; voice?: string }): Promise<{ utteranceId: string; queued: boolean }>
+  stop(): Promise<void>
+  getVoices(): Promise<{ voices: TtsVoice[] }>
+  addListener(
+    event: 'onStart' | 'onDone' | 'onError',
+    cb: (d: TtsEvent) => void
+  ): Promise<{ remove: () => Promise<void> }>
+  addListener(
+    event: 'onPrepareProgress',
+    cb: (d: { phase: 'loading' | 'ready' | 'failed'; reason?: string }) => void
+  ): Promise<{ remove: () => Promise<void> }>
+}
+
 export interface NativeTtsPlugin {
   isAvailable(): Promise<{ available: boolean; reason?: string }>
   speak(o: { text: string; rate?: number; voice?: string }): Promise<{ utteranceId: string; queued: boolean }>
@@ -258,6 +282,7 @@ export type EngineReason =
   | 'engine-not-ready'
   | 'engine-init-failed'
   | 'online-failed'
+  | 'local-failed'
 
 /**
  * Per-utterance subscription.
@@ -292,6 +317,12 @@ export interface TtsEngine {
    * the wait overlaps with loading the chapter instead of following a tap.
    */
   warm?(): void
+  /**
+   * False once this engine has proven it cannot run (a bundled model that
+   * failed to load). The router then stops choosing it, so a broken model
+   * costs one failed load instead of a dead 听书.
+   */
+  usable?(): boolean
   /**
    * True when this voice can be synthesised to disk before playback. Only the
    * online engine can: on-device engines have no way to render audio to a file
@@ -551,58 +582,172 @@ async function edgeEngine(plugin: NativeEdgeTtsPlugin): Promise<TtsEngine> {
 }
 
 /**
- * Route per voice: `edge:` ids go online, everything else stays on the phone.
+ * On-device neural voices, over the sherpa-onnx plugin.
  *
- * The system engine is still the default, so simply opening 听书 never touches
- * the network. When the phone has no Chinese voice pack at all, the online
- * voices keep the feature usable instead of declaring it unavailable.
+ * The plugin keeps one AudioTrack open and synthesises ahead of it, so the only
+ * thing this layer has to do is hand it text in order and settle promises on
+ * its events — the same contract as every other engine.
  */
-function compositeEngine(system: TtsEngine, edge: TtsEngine): TtsEngine {
-  const isOnline = (voice?: string) => !!voice && EDGE_VOICES.some(v => v.id === voice)
+async function sherpaEngine(plugin: NativeSherpaTtsPlugin): Promise<TtsEngine> {
+  const pending = new Map<
+    string,
+    { resolve: () => void; reject: (e: unknown) => void; hooks?: SpeakHooks }
+  >()
+  let ready = false
+  let loading: Promise<boolean> | null = null
+  /** Set when the model could not be loaded; the router stops picking us. */
+  let failed = false
+
+  const settle = (id: string, ok: boolean) => {
+    const hooks = pending.get(id)
+    if (!hooks) return
+    pending.delete(id)
+    if (ok) hooks.resolve()
+    else hooks.reject(new Error('sherpa-failed'))
+  }
+
+  /** Load the model at most once; concurrent callers share the same wait. */
+  const ensure = (): Promise<boolean> => {
+    if (ready) return Promise.resolve(true)
+    if (!loading) {
+      loading = plugin
+        .prepare()
+        .then(r => {
+          ready = !!r.ready
+          if (!ready) failed = true
+          loading = null
+          return ready
+        })
+        .catch(() => {
+          failed = true
+          loading = null
+          return false
+        })
+    }
+    return loading
+  }
+
+  await plugin.addListener('onDone', ({ utteranceId }) => settle(utteranceId, true))
+  await plugin.addListener('onError', ({ utteranceId }) => settle(utteranceId, false))
+  await plugin.addListener('onStart', ({ utteranceId }) => {
+    pending.get(utteranceId)?.hooks?.onStart?.({})
+  })
+
+  return {
+    kind: 'native',
+    // The plugin's own queue is what makes the next utterance gapless.
+    canLookahead: () => true,
+    async speak(text, rate, voice, hooks) {
+      if (!await ensure()) throw new Error('sherpa-failed')
+      const { utteranceId, queued } = await plugin.speak({ text, rate, voice })
+      if (!queued) throw new Error('sherpa-failed')
+      await new Promise<void>((resolve, reject) => {
+        pending.set(utteranceId, { resolve, reject, hooks })
+      })
+    },
+    async stop() {
+      try {
+        await plugin.stop()
+      } catch {
+        // Nothing was playing.
+      }
+      for (const hooks of pending.values()) hooks.reject(new TtsCancelled())
+      pending.clear()
+    },
+    warm() {
+      // Loading the model takes a few seconds; do it while the reader is still
+      // opening the chapter instead of after the tap on 听.
+      void ensure()
+    },
+    usable() {
+      return !failed
+    },
+    async voices() {
+      if (!await ensure()) return []
+      try {
+        const { voices } = await plugin.getVoices()
+        return voices
+      } catch {
+        return []
+      }
+    },
+  }
+}
+
+/**
+ * Route every call to the engine that owns the current voice.
+ *
+ *  - `sherpa:…` → local neural voice (no network, one continuous audio stream)
+ *  - `edge:…`   → the online emotional voices
+ *  - `''` (default) → local neural voice when the model is in the build,
+ *    otherwise the phone's own engine, otherwise online — so 听书 always plays
+ *    something instead of showing an error on an odd device.
+ */
+function compositeEngine(
+  sherpa: TtsEngine | null,
+  system: TtsEngine,
+  edge: TtsEngine | null,
+): TtsEngine {
+  const isEdge = (voice?: string) => !!voice && EDGE_VOICES.some(v => v.id === voice)
+  const isSherpa = (voice?: string) => !!voice && voice.startsWith('sherpa:')
+
+  const local = () => (sherpa && sherpa.usable?.() !== false ? sherpa : null)
+
+  const pick = (voice?: string): TtsEngine => {
+    if (isEdge(voice)) return edge || system
+    if (isSherpa(voice)) return local() || system
+    if (local()) return local() as TtsEngine
+    if (system.kind !== 'none') return system
+    return edge || system
+  }
+
+  const online = (voice?: string) => isEdge(voice) && !!edge?.canPrefetch?.(voice)
 
   return {
     kind: 'native',
     canLookahead(voice) {
-      // Online voices synthesise ahead on the native queue; on-device voices
-      // queue with QUEUE_ADD. Both accept one sentence in advance.
-      if (isOnline(voice)) return edge.canLookahead?.(voice) === true
-      if (system.kind === 'none') return edge.canLookahead?.(voice) === true
-      return system.canLookahead?.(voice) === true
+      return pick(voice).canLookahead?.(voice) === true
     },
     speak(text, rate, voice, hooks) {
-      if (isOnline(voice)) return edge.speak(text, rate, voice, hooks)
-      if (system.kind === 'none') return edge.speak(text, rate, EDGE_VOICES[0].id, hooks)
-      return system.speak(text, rate, voice, hooks)
+      return pick(voice).speak(text, rate, voice, hooks)
     },
     warm() {
-      // Warm both: the chosen voice is only known per call, and warming is
-      // silent and cheap. The system engine is the one with a real cold start.
+      // Both on-device paths are worth warming: the model load is seconds and
+      // the phone engine's cold start is audible.
+      sherpa?.warm?.()
       system.warm?.()
     },
     /*
-     * Only the online path can be prepared ahead. When the phone's own engine
-     * is being used, playback is already a local queue — there is nothing to
-     * render to disk, and a loading state would be pure ceremony.
+     * Only the online path renders audio to disk ahead of time. The on-device
+     * engines already queue, and a loading state for them would be ceremony.
      */
     canPrefetch(voice) {
-      const online = isOnline(voice) || system.kind === 'none'
-      return online && edge.canPrefetch?.(voice) === true
+      return online(voice)
     },
     prefetch(items, rate, voice, onProgress, token) {
-      if (edge.prefetch && (isOnline(voice) || system.kind === 'none')) {
+      if (edge?.prefetch && online(voice)) {
         return edge.prefetch(items, rate, voice, onProgress, token)
       }
       return Promise.resolve({ ok: 0, failed: 0 })
     },
     async cancelPrefetch() {
-      await edge.cancelPrefetch?.()
+      await edge?.cancelPrefetch?.()
     },
     async stop() {
-      await Promise.all([system.stop(), edge.stop()])
+      await Promise.all([sherpa?.stop(), system.stop(), edge?.stop()])
     },
     async voices() {
-      const [onDevice, online] = await Promise.all([system.voices(), edge.voices()])
-      return [...online, ...onDevice]
+      const [onDeviceVoices, online] = await Promise.all([
+        local() ? (local() as TtsEngine).voices() : Promise.resolve([]),
+        edge ? edge.voices() : Promise.resolve([]),
+      ])
+      /*
+       * 本地神经音色可用时不再列手机自带的那套：它也叫「离线」，却只有
+       * `zh`/`en` 这种语言名，音质还更差，列出来只会让人以为两组是重复的。
+       * 本地不可用时才退回它，保证还有得选。
+       */
+      const onDevice = onDeviceVoices.length ? [] : await system.voices()
+      return [...onDeviceVoices, ...online, ...onDevice]
     },
   }
 }
@@ -630,6 +775,22 @@ async function systemEngine(): Promise<TtsEngine> {
   return noneEngine('engine-not-ready')
 }
 
+/**
+ * The on-device neural engine is optional too: it is a local plugin plus a
+ * bundled model, so a build made without the model simply has no local voice
+ * and falls back to the phone's engine.
+ */
+async function localEngine(): Promise<TtsEngine | null> {
+  try {
+    const plugin = registerPlugin<NativeSherpaTtsPlugin>('SherpaTts')
+    const status = await plugin.isAvailable()
+    if (!status.available) return null
+    return await sherpaEngine(plugin)
+  } catch {
+    return null
+  }
+}
+
 /** The online plugin is optional: older builds and `vite dev` do not have it. */
 async function onlineEngine(): Promise<TtsEngine | null> {
   let plugin: NativeEdgeTtsPlugin
@@ -654,9 +815,9 @@ async function onlineEngine(): Promise<TtsEngine | null> {
  */
 export async function createEngine(): Promise<TtsEngine> {
   if (Capacitor.isNativePlatform()) {
-    const [system, online] = await Promise.all([systemEngine(), onlineEngine()])
-    if (!online) return system
-    return system.kind === 'none' ? online : compositeEngine(system, online)
+    const [system, online, local] = await Promise.all([systemEngine(), onlineEngine(), localEngine()])
+    if (!online && !local) return system
+    return compositeEngine(local, system, online)
   }
 
   const web = webEngine()
@@ -674,6 +835,8 @@ export function reasonText(reason?: EngineReason): string {
       return '语音引擎启动失败，检查系统设置里的文字转语音'
     case 'online-failed':
       return '在线音色合成失败，检查网络后重试，或换一个离线音色'
+    case 'local-failed':
+      return '本地语音模型没加载起来，换一个音色或重装安装包再试'
     default:
       return '这台设备不支持朗读'
   }

@@ -38,6 +38,13 @@ android {
         versionCode appVersionCode
         versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        /*
+         * 只出 arm64：离线语音库（sherpa-onnx）四个 ABI 加起来 48MB，而 32 位
+         * 手机早已不在这个 App 的目标里，砍掉三个 ABI 能省 30MB 安装包。
+         */
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -80,6 +87,12 @@ dependencies {
     // Edge read-aloud endpoint is reached over WebSocket; the platform has no
     // WebSocket client below API 34, so OkHttp carries the online voices.
     implementation "com.squareup.okhttp3:okhttp:5.3.2"
+    /*
+     * 本地神经语音（离线朗读）。AAR 是本地文件，没有 POM，所以它依赖的
+     * kotlin-stdlib 必须自己声明，否则运行到 sherpa 的 Kotlin 类就会崩。
+     */
+    implementation(name: 'sherpa-onnx-1.13.8', ext: 'aar')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

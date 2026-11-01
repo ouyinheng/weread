@@ -496,6 +496,7 @@ function createListenSession() {
     currentSentence,
     remainText,
     /* actions */
+    prewarm: player.prewarm,
     begin,
     jumpToChapter,
     play,

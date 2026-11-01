@@ -47,6 +47,19 @@ jobs:
       - name: 同步到 Android 工程
         run: ./node_modules/.bin/cap sync android
 
+      # 离线语音的两样东西不入库：模型 120MB 超过 GitHub 的单文件上限，AAR 也不该进
+      # 仓库。构建前必须补齐，否则 build.gradle 里的 sherpa-onnx AAR 直接解析失败。
+      # 缓存键写死版本号，模型不变就一直命中，省掉每次 170MB 的下载。
+      - uses: actions/cache@v4
+        with:
+          path: |
+            android/app/libs/sherpa-onnx-*.aar
+            android/app/src/main/assets/sherpa-onnx
+          key: sherpa-onnx-1.13.8-vits-zh-hf-fanchen-C
+
+      - name: 拉取离线语音
+        run: sh scripts/fetch-sherpa-model.sh
+
       - name: 补齐 SDK 平台
         run: |
           if [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then
@@ -105,6 +118,17 @@ jobs:
 
       - name: 同步到 Android 工程
         run: ./node_modules/.bin/cap sync android
+
+      # 与 debug 任务同一份缓存：离线语音的 AAR 与中文模型（见 apk 任务里的说明）。
+      - uses: actions/cache@v4
+        with:
+          path: |
+            android/app/libs/sherpa-onnx-*.aar
+            android/app/src/main/assets/sherpa-onnx
+          key: sherpa-onnx-1.13.8-vits-zh-hf-fanchen-C
+
+      - name: 拉取离线语音
+        run: sh scripts/fetch-sherpa-model.sh
 
       - name: 补齐 SDK 平台
         run: |

@@ -91,7 +91,7 @@ const emotionalVoices = computed(() => voices.value.filter(v => v.provider === '
 const onlineVoices = computed(() => voices.value.filter(v => !v.local && v.provider !== 'edge'))
 
 const selectedVoiceLabel = computed(() => {
-  if (!props.voice) return '跟随系统默认'
+  if (!props.voice) return '默认 · 本机离线'
   return voiceLabel(props.voice)
 })
 
@@ -386,18 +386,19 @@ function handleClose(): void {
         </template>
 
         <template v-if="sheet === 'voice'">
-          <p class="lv-sheet__hint">在线音色联网合成，语气更自然、能听出情绪；离线音色不耗流量。</p>
+          <p class="lv-sheet__hint">要「有人味」就选下面的<b>在线情感音色</b>：它们会按句子演语气，代价是要联网。<br>
+            默认的本地音色胜在不联网、句子之间无缝，但语气是平的——机器念字，不做表演。</p>
           <div v-if="voicesLoading" class="lv-sheet__status">正在读取音色…</div>
           <p v-else-if="voicesError" class="lv-sheet__error">{{ voicesError }}</p>
           <div v-else class="lv-sheet__scroll">
             <button class="lv-voice" :class="{ 'lv-voice--on': !voice }" @click="handleVoiceDefault">
-              <span class="lv-voice__name">跟随系统默认</span>
-              <span class="lv-voice__meta">由系统自动选择中文音色</span>
+              <span class="lv-voice__name">默认 · 本机离线</span>
+              <span class="lv-voice__meta">不联网、句子之间无缝 · 语气平实</span>
               <Icon v-if="!voice" name="check" :size="18" class="lv-voice__check" />
             </button>
 
             <template v-if="emotionalVoices.length">
-              <p class="lv-sheet__group">在线情感音色</p>
+              <p class="lv-sheet__group">在线情感音色 · 最像人</p>
               <button
                 v-for="v in emotionalVoices"
                 :key="v.name"
@@ -412,7 +413,7 @@ function handleClose(): void {
             </template>
 
             <template v-if="offlineVoices.length">
-              <p class="lv-sheet__group">离线音色</p>
+              <p class="lv-sheet__group">离线音色 · 不联网，语气平</p>
               <button
                 v-for="v in offlineVoices"
                 :key="v.name"
@@ -420,7 +421,7 @@ function handleClose(): void {
                 :class="{ 'lv-voice--on': voice === v.name }"
                 @click="handlePickVoice(v)"
               >
-                <span class="lv-voice__name">{{ v.name }}</span>
+                <span class="lv-voice__name">{{ v.label || v.name }}</span>
                 <span class="lv-voice__meta">{{ v.lang }} · 离线</span>
                 <Icon v-if="voice === v.name" name="check" :size="18" class="lv-voice__check" />
               </button>
@@ -662,12 +663,6 @@ function handleClose(): void {
 @keyframes lvSpin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .lv__spinner {
-    animation-duration: 2s;
   }
 }
 

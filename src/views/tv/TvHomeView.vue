@@ -6,14 +6,14 @@
  * 列表数据缓存 24 小时（内存 + localStorage，跨启动也有效）：返回本页或在
  * tab 之间来回切都不重新打接口；想立刻看新的就下拉刷新。
  */
-import { computed, onActivated, onMounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
 import { useTvStore } from '@/stores/tv'
 import { peekLatest, saveLatest } from '@/utils/tv/cache'
-import { latestFrom } from '@/utils/tv/cms'
+import { latestFrom, listCategories, type TvCategory } from '@/utils/tv/cms'
 import { pickLocalVideos } from '@/utils/tv/local'
-import type { TvItem } from '@/utils/tv/types'
+import type { TvItem, TvSource } from '@/utils/tv/types'
 
 // 组件名对上 App.vue 的 keep-alive include，tab 页面才不会一返回就整页重建。
 defineOptions({ name: 'tv' })
@@ -24,7 +24,24 @@ const store = useTvStore()
 const items = ref<TvItem[]>([])
 const loading = ref(false)
 const error = ref('')
-const activeCat = ref('全部')
+/**
+ * 选中的频道。key 有三种：
+ *   ''        全部
+ *   't:<id>'  源站分类（服务端过滤，TVBox 那一条就是这么来的）
+ *   'c:<名>'  源站没给分类时的本地兜底（按 type_name 归并）
+ */
+const activeChip = ref('')
+/** 源站的分类表 + 它是从哪个源取的（分类 id 不能跨源用）。 */
+const sourceCats = ref<TvCategory[]>([])
+const catSource = ref('')
+
+/* ---------- 滚动加载 ---------- */
+/** 当前已取到第几页；源站默认一页 20 条左右。 */
+const page = ref(1)
+const hasMore = ref(true)
+const loadingMore = ref(false)
+/** 这次列表是从哪几个源拼出来的——翻页必须用同一组，否则页码对不上。 */
+let pageSources: TvSource[] = []
 /** 缓存时间戳，用来在标题行显示「更新于 …」。 */
 const updatedAt = ref(0)
 
@@ -100,7 +117,21 @@ const hasSources = computed(() => store.sources.length > 0)
 /** 频道：只在片库里真有内容的频道才出 chip，点了空频道不会有空墙。 */
 const cats = computed(() => CATEGORY_ORDER.filter(cat => items.value.some(i => categoryOf(i) === cat)))
 
-const chips = computed(() => ['全部', ...cats.value])
+/**
+ * 频道条优先用源站自己的分类表（TVBox 那一长条），拉不到才退回按
+ * `type_name` 归并出来的几个大类。
+ */
+const chips = computed(() =>
+  sourceCats.value.length
+    ? [{ key: '', label: '全部' }, ...sourceCats.value.map(c => ({ key: `t:${c.id}`, label: c.name }))]
+    : [{ key: '', label: '全部' }, ...cats.value.map(name => ({ key: `c:${name}`, label: name }))],
+)
+
+const activeLabel = computed(() => chips.value.find(c => c.key === activeChip.value)?.label || '全部')
+/** 服务端分类 id（空 = 不过滤）。 */
+const serverType = computed(() => (activeChip.value.startsWith('t:') ? activeChip.value.slice(2) : ''))
+/** 本地兜底分类名。 */
+const clientCat = computed(() => (activeChip.value.startsWith('c:') ? activeChip.value.slice(2) : ''))
 
 /**
  * 每个频道（含「全部」）都用同一套海报墙。
@@ -108,9 +139,12 @@ const chips = computed(() => ['全部', ...cats.value])
  * 之前「全部」是多条横滑带（刚刚上架 + 每个频道一条），其它频道是网格，
  * 点一下 chip 版式就换一种，读起来像两个页面。现在统一成网格。
  */
-const activeGrid = computed(() =>
-  activeCat.value === '全部' ? items.value : items.value.filter(i => categoryOf(i) === activeCat.value),
-)
+const activeGrid = computed(() => {
+  // 服务端已经按分类筛过了，直接铺。
+  if (serverType.value) return items.value
+  if (clientCat.value) return items.value.filter(i => categoryOf(i) === clientCat.value)
+  return items.value
+})
 
 onMounted(sync)
 /**
@@ -129,6 +163,7 @@ onActivated(() => {
 /** 有缓存先画缓存；不新鲜才去拉，拉的时候有旧数据就不转圈。 */
 async function sync() {
   await store.load()
+  void loadCats()
   const cached = peekLatest()
   if (cached) {
     items.value = cached.items
@@ -138,14 +173,44 @@ async function sync() {
   void reload({ silent: items.value.length > 0 })
 }
 
+/**
+ * 拉第一个可用源的分类表。TVBox 那条长分类就是源站自己给的 `class`。
+ *
+ * 拉不到（源只支持 `ac=videolist`、或者返回结构不标准）就静默退回按
+ * `type_name` 归并出来的几个大类，不至于连频道条都没有。
+ */
+async function loadCats(): Promise<void> {
+  const src = store.enabledSources[0]
+  if (!src) return
+  if (catSource.value === src.id && sourceCats.value.length) return
+  try {
+    const list = await listCategories(src)
+    if (!list.length) return
+    sourceCats.value = list
+    catSource.value = src.id
+  } catch {
+    // 源不支持分类接口：保留兜底频道
+  }
+}
+
 /** 逐源拉第一页合并去重：一个源只给一页，多并几个源片库才够分频道。 */
-async function reload(opts: { silent?: boolean } = {}) {
-  const sources = store.enabledSources.slice(0, 3)
+async function reload(opts: { silent?: boolean; typeId?: string } = {}) {
+  const typeId = opts.typeId || ''
+  /*
+   * 分类 id 是**源站自己的**，跨源没有意义：按分类看时只问给出分类表的那一个源。
+   * 不限分类时才多源合并，片库才够铺。
+   */
+  const sources = typeId
+    ? store.enabledSources.filter(s => s.id === catSource.value)
+    : store.enabledSources.slice(0, 3)
   if (!sources.length) return
   if (!opts.silent) loading.value = true
   error.value = ''
 
-  const results = await Promise.allSettled(sources.map(s => latestFrom(s, 30)))
+  pageSources = sources
+  page.value = 1
+  hasMore.value = true
+  const results = await Promise.allSettled(sources.map(s => latestFrom(s, 0, typeId || undefined)))
   const merged: TvItem[] = []
   const seen = new Set<string>()
   for (const r of results) {
@@ -159,14 +224,76 @@ async function reload(opts: { silent?: boolean } = {}) {
 
   if (merged.length) {
     items.value = merged
-    saveLatest(merged)
-    updatedAt.value = Date.now()
-    // 静默换新后选中的频道可能没了，退回「全部」，不留空海报墙。
-    if (activeCat.value !== '全部' && !chips.value.includes(activeCat.value)) activeCat.value = '全部'
+    // 「最近更新」的缓存只存不限分类的那一份，分类视图别覆盖它。
+    if (!typeId) {
+      saveLatest(merged)
+      updatedAt.value = Date.now()
+    }
+  } else if (typeId) {
+    items.value = []
+    error.value = `「${activeLabel.value}」这个分类暂时没有片子`
   } else if (!items.value.length) {
     error.value = '最近更新暂时拉不到，去「我 → 视频源管理」测一下源'
   }
   loading.value = false
+  void ensureFilled()
+}
+
+/**
+ * 再取一页，追加到当前列表。
+ *
+ * 同一页在多个源之间也做一次按片名去重——源站之间互相抄，重复是常态；
+ * 但如果这一页**全是重复的**，说明已经翻到底了，停手。
+ */
+async function loadMore(): Promise<void> {
+  if (loadingMore.value || loading.value || !hasMore.value || !pageSources.length) return
+  loadingMore.value = true
+  const next = page.value + 1
+  try {
+    const results = await Promise.allSettled(
+      pageSources.map(s => latestFrom(s, 0, serverType.value || undefined, next)),
+    )
+    const raw = results.flatMap(r => (r.status === 'fulfilled' ? r.value : []))
+    if (!raw.length) {
+      hasMore.value = false
+      return
+    }
+    const seen = new Set(items.value.map(i => i.name))
+    const fresh: TvItem[] = []
+    for (const it of raw) {
+      if (seen.has(it.name)) continue
+      seen.add(it.name)
+      fresh.push(it)
+    }
+    page.value = next
+    if (!fresh.length) {
+      hasMore.value = false
+      return
+    }
+    items.value = [...items.value, ...fresh]
+  } catch {
+    hasMore.value = false
+  } finally {
+    loadingMore.value = false
+    void ensureFilled()
+  }
+}
+
+/**
+ * 内容不够一屏时不会产生滚动，也就永远不会触发翻页。
+ * 每次换完列表看一眼：还能再装就自己补一页。
+ */
+async function ensureFilled(): Promise<void> {
+  await nextTick()
+  const el = document.querySelector('.tv__body') as HTMLElement | null
+  if (!el) return
+  if (el.scrollHeight <= el.clientHeight + 120) void loadMore()
+}
+
+/** 滚到底部前 400px 就预取下一页，别等真到底了才转圈。 */
+function onScroll(e: Event): void {
+  const el = e.currentTarget as HTMLElement
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) void loadMore()
 }
 
 function goSearch() {
@@ -198,8 +325,11 @@ function metaOf(item: TvItem): string {
 }
 
 /* ---- 模板事件 ---- */
-function handlePickCategory(cat: string): void {
-  activeCat.value = cat
+function handlePickCategory(key: string): void {
+  if (activeChip.value === key) return
+  activeChip.value = key
+  // 源站分类要让服务端筛；本地兜底直接在现有片库里过滤，不用再打接口。
+  if (key.startsWith('t:')) void reload({ typeId: key.slice(2) })
 }
 
 function handleRetry(): void {
@@ -241,6 +371,7 @@ function handleRetry(): void {
       @touchmove="onTouchMove"
       @touchend="onTouchEnd"
       @touchcancel="onTouchEnd"
+      @scroll.passive="onScroll"
     >
       <!-- 下拉刷新指示器：高度跟着手指走，松手过阈值才真刷新 -->
       <div
@@ -273,18 +404,18 @@ function handleRetry(): void {
         <div v-if="chips.length > 1" class="tv__chips">
           <button
             v-for="c in chips"
-            :key="c"
+            :key="c.key"
             class="tv-chip"
-            :class="{ 'tv-chip--on': activeCat === c }"
-            @click="handlePickCategory(c)"
+            :class="{ 'tv-chip--on': activeChip === c.key }"
+            @click="handlePickCategory(c.key)"
           >
-            {{ c }}
+            {{ c.label }}
           </button>
         </div>
 
         <section class="tv__section">
           <div class="tv__section-head">
-            <h2 class="tv__section-title">{{ activeCat }}</h2>
+            <h2 class="tv__section-title">{{ activeLabel }}</h2>
             <span class="tv__section-from">
               {{ activeGrid.length }} 部<template v-if="updatedText"> · {{ updatedText }}</template>
             </span>
@@ -312,6 +443,10 @@ function handleRetry(): void {
         </div>
 
         <p v-else-if="error" class="tv__rail-error" @click="handleRetry">{{ error }}，点此重试</p>
+
+        <!-- 滚动加载的尾巴：还在取就转圈，取完了给一句「没有更多了」 -->
+        <p v-else-if="!loadingMore && !hasMore && activeGrid.length" class="tv__more">没有更多了</p>
+        <p v-else-if="loadingMore" class="tv__more tv__more--busy">正在加载…</p>
       </template>
     </main>
   </div>
@@ -540,6 +675,31 @@ function handleRetry(): void {
 }
 .tv-chip:active {
   opacity: 0.7;
+}
+
+.tv__more {
+  margin: 0;
+  padding: 18px 16px calc(20px + var(--safe-bottom));
+  text-align: center;
+  font-size: calc(12px * var(--app-font-scale));
+  color: var(--text-secondary);
+}
+.tv__more--busy::after {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-left: 6px;
+  border: 1.5px solid var(--text-secondary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: tv-more-spin 0.7s linear infinite;
+  vertical-align: -1px;
+}
+@keyframes tv-more-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .tv__rail {

@@ -14,6 +14,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
 import { useTvStore } from '@/stores/tv'
+import { describeSkips, parseSubscription, type ImportResult } from '@/utils/tv/subscription'
 import { testSource } from '@/utils/tv/cms'
 import { confirmDialog } from '@/utils/dialog'
 import { HEALTH_COLOR, HEALTH_LABEL } from '@/types/source'
@@ -183,34 +184,6 @@ function decodeBase64Text(b64: string): string {
   return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)))
 }
 
-/**
- * 兼容三种结构：
- *  - LibreTV 导出：{ customAPIs: [{ name, url }] }
- *  - TVBox 配置：  { sites: [{ name, api }] }
- *  - 裸数组：      [{ name, url | api }]
- */
-function parseImport(text: string): Array<{ name?: string; api: string }> {
-  const data = JSON.parse(text)
-  const out: Array<{ name?: string; api: string }> = []
-  const push = (n: unknown, a: unknown) => {
-    if (typeof a !== 'string') return
-    if (!/^https?:\/\//i.test(a)) return
-    out.push({ name: typeof n === 'string' ? n : undefined, api: a })
-  }
-
-  if (Array.isArray(data)) {
-    data.forEach((row: any) => push(row?.name, row?.api || row?.url))
-  } else if (Array.isArray(data?.customAPIs)) {
-    data.customAPIs.forEach((row: any) => push(row?.name, row?.url || row?.api))
-  } else if (Array.isArray(data?.sites)) {
-    data.sites.forEach((row: any) => push(row?.name || row?.key, row?.api || row?.url))
-  } else if (Array.isArray(data?.sources)) {
-    data.sources.forEach((row: any) => push(row?.name, row?.url || row?.api))
-  }
-
-  return out
-}
-
 async function doImport(): Promise<void> {
   if (importBusy.value) return
   importBusy.value = true
@@ -239,22 +212,24 @@ async function doImport(): Promise<void> {
       flash(tab.value === 'url' ? '先填源列表链接' : '先粘贴 JSON 或选一个文件')
       return
     }
-    let list: Array<{ name?: string; api: string }>
+    let parsed: ImportResult
     try {
-      list = parseImport(text)
+      parsed = parseSubscription(text)
     } catch {
       flash('不是合法 JSON')
       return
     }
-    if (!list.length) {
-      flash('没找到接口地址，检查 JSON 结构')
+    const skipped = describeSkips(parsed.skipped)
+    if (!parsed.sources.length) {
+      flash(skipped ? `没有可直连的接口（跳过 ${skipped}）` : '没找到接口地址，检查 JSON 结构')
       return
     }
-    const added = store.importSources(list)
+    const added = store.importSources(parsed.sources)
     importText.value = ''
     importUrl.value = ''
     sheet.value = false
-    flash(added ? `新增 ${added} 个源` : '这些源都已经在了')
+    const head = added ? `新增 ${added} 个源` : '这些源都已经在了'
+    flash(skipped ? `${head}，跳过 ${skipped}` : head)
   } catch (err) {
     flash(`拉取失败：${(err as Error).message || '未知错误'}`)
   } finally {
@@ -397,13 +372,17 @@ function handleUsePasteTab(): void {
             填一份源列表的直链：LibreTV 导出的 <code>customAPIs</code>、TVBox 的 <code>sites</code>，或
             <code>[{ "name": …, "url": … }]</code> 数组都认。 Gitee / GitHub
             的仓库页面地址直接贴就行，会自动换成能跨域读取的接口。
+            <br />
+            只导入能直连的苹果 CMS 接口；TVBox 里靠 Spider 引擎跑的（<code>csp_</code> / jar /
+            js）和 XML 接口会跳过并计数。
           </p>
         </template>
 
         <template v-else>
           <p class="src-sheet__hint">
             支持 LibreTV 导出的 <code>{ "customAPIs": […] }</code>、TVBox 的 <code>{ "sites": […] }</code>，或
-            <code>[{ "name": …, "url": … }]</code> 数组。
+            <code>[{ "name": …, "url": … }]</code> 数组。只导入能直连的苹果 CMS
+            接口，Spider / XML 类会跳过并计数。
           </p>
 
           <button class="src-sheet__file" @click="pickFile">

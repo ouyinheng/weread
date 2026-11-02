@@ -71,8 +71,16 @@ export interface PlayerDeps {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
-/** How many chunks to hand the engine ahead of the one playing. */
-const LOOKAHEAD = 2
+/**
+ * How many chunks to hand the engine ahead of the one playing.
+ *
+ * 6, not 2: the queue is the only thing standing between a frozen WebView and
+ * silence. With ~19 s chunks this is about two minutes of runway, which covers
+ * the screen-off window where Android may stop scheduling the page; when the
+ * page wakes up it re-fills the queue. Online voices have the whole chapter on
+ * disk already, so asking for more costs nothing.
+ */
+const LOOKAHEAD = 6
 
 /**
  * Fallback speaking speed, 汉字/秒, for engines that report neither character

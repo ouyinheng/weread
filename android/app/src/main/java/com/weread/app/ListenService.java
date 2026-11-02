@@ -8,8 +8,11 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
+import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
@@ -68,10 +71,16 @@ public class ListenService extends Service {
         callback = null;
     }
 
+    private static final String TAG = "ListenService";
+
     private String title = "";
     private String text = "";
     private boolean playing = false;
     private boolean foreground = false;
+
+    /** 锁屏继续念的两个前提：CPU 不睡、WiFi 不降频。 */
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     /* ---------------- entry points from the page ---------------- */
 
@@ -148,6 +157,7 @@ public class ListenService extends Service {
             playing = intent.getBooleanExtra(EXTRA_PLAYING, playing);
         }
 
+        applyLocks(playing);
         ensureChannel();
         if (!foreground) {
             // Must happen within a few seconds of startForegroundService().
@@ -174,7 +184,9 @@ public class ListenService extends Service {
             foreground = true;
         } catch (Exception e) {
             // Missing permission / refused promotion: playback still works in
-            // the foreground, so this must not crash the service.
+            // the foreground, so this must not crash the service. Logged because
+            // a silent failure here is exactly what "锁屏几十秒就停" looks like.
+            Log.e(TAG, "startForeground failed: " + e, e);
             foreground = false;
         }
     }
@@ -193,10 +205,52 @@ public class ListenService extends Service {
     /** Leave no notification behind and stop owning the process. */
     private void teardown() {
         foreground = false;
+        applyLocks(false);
         try {
             stopForeground(true);
         } catch (Exception ignored) { /* already gone */ }
         stopSelf();
+    }
+
+    /**
+     * 锁屏后还要继续念，靠两把锁：
+     *
+     *  - PARTIAL_WAKE_LOCK：保住 CPU。AudioTrack 播放期间系统自己会持有唤醒锁，
+     *    但**段落之间的空档**（换段、合成、网络回包）轨道是闲的，CPU 可以睡下去，
+     *    睡过去之后 JS 那边的喂句循环就断了。
+     *  - WIFI_MODE_FULL_HIGH_PERF：在线音色的音频要走网络，锁屏后 WiFi 进入省电
+     *    模式会把拉流压低甚至掐断。
+     *
+     * 只在播放中持有，暂停立刻放掉；唤醒锁再带 3 小时上限，万一服务没被正常
+     * 关掉也不会一直拖着电池。
+     */
+    private void applyLocks(boolean on) {
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (wakeLock == null && pm != null) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "weread:listen");
+            wakeLock.setReferenceCounted(false);
+        }
+        if (wifiLock == null) {
+            WifiManager wm = (WifiManager) getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "weread:listen");
+                wifiLock.setReferenceCounted(false);
+            }
+        }
+        try {
+            if (on) {
+                if (wakeLock != null && !wakeLock.isHeld()) {
+                    wakeLock.acquire(3 * 60 * 60 * 1000L);
+                }
+                if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
+            } else {
+                if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+                if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "lock state change failed: " + t);
+        }
     }
 
     @Override
@@ -214,6 +268,7 @@ public class ListenService extends Service {
     @Override
     public void onDestroy() {
         foreground = false;
+        applyLocks(false);
         try {
             stopForeground(true);
         } catch (Exception ignored) { /* already gone */ }
@@ -250,6 +305,11 @@ public class ListenService extends Service {
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android 12+ 默认把前台服务通知延迟 10 秒；这 10 秒里系统的前台
+            // 服务保护还没生效，锁屏后最容易在这段被回收。
+            b.setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE);
+        }
 
         Intent open = new Intent(this, MainActivity.class)
                 .setAction(Intent.ACTION_MAIN)

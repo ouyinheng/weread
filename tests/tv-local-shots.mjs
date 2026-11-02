@@ -233,7 +233,8 @@ try {
       title: document.querySelector('.tv-play__name')?.textContent || '',
       hasCast: !!document.querySelector('.tv-play__top button[aria-label="投屏"]'),
       hasShare: [...document.querySelectorAll('.tv-play__action-label')].some(e => e.textContent === '分享'),
-      epCount: document.querySelectorAll('.tv-play__ep-btn').length,
+      // 选集只有抽屉一个形态，正文里是一条入口；集数从它的副标题读。
+      epEntry: document.querySelector('.tv-play__eps-entry')?.innerText.replace(/\s+/g, ' ') || '',
       fatal: document.querySelector('.tv-play__fatal-text')?.textContent || '',
     }
   })()`)

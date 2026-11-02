@@ -15,10 +15,14 @@
  * 弹幕开关 / 设置 / 输入框按参考图画出来（控制行的弹幕三件套是播放器的
  * 视觉组成），但采集源没有弹幕服务器，真实弹幕发不了，点击只给「暂未开放」。
  *
- * 播放内核是 artplayer（成熟开源库）+ hls.js。artplayer 自带的控制栏整个
- * 藏掉（CSS `display:none`），控制层由本页自绘，显隐跟着 artplayer 的
- * `control` 事件走——单击显隐、双击播放/暂停、左右拖动调进度（`gesture`）、
- * 长按 3 倍速（`fastForward`）、锁屏（`lock`）这些手势仍是它自带的。
+ * 播放内核换成 xgplayer（字节开源）+ xgplayer-hls.js，替换掉原来的 artplayer：
+ * artplayer 的手势层在 WebView 里偏弱（没有长按加速的力度反馈、没有缓冲态
+ * 过渡），xgplayer 的移动端预设是国内长视频打磨过的，手势、缓冲、错误兜底
+ * 都更接近芒果/腾讯那种观感。
+ *
+ * 控制栏仍然由本页自绘（`controls: false`），所以视觉上还是照着参考图来的
+ * 那一套；xgplayer 只负责解码、缓冲、HLS 和手势（单击显隐由本页接管，
+ * 双击播放/暂停、长按 2 倍速、左右拖进度是它自带）。
  *
  * 全屏走的是平台 HTML5 全屏（`element.requestFullscreen()`），真正的实施在
  * 原生侧：`MainActivity.FullscreenChromeClient` 把全屏元素盖满窗口、藏掉系统
@@ -29,10 +33,10 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import Artplayer from 'artplayer'
-import Hls from 'hls.js'
+import Player from 'xgplayer'
+import HlsJsPlugin from 'xgplayer-hls.js'
+import 'xgplayer/dist/index.min.css'
 import Icon from '@/components/Icon.vue'
-import MorphIcon from '@/components/MorphIcon.vue'
 import CastSheet from '@/components/tv/CastSheet.vue'
 import { castSupported, castStatus, castTo, stopCasting, type CastDevice } from '@/utils/cast'
 import { useTvStore } from '@/stores/tv'
@@ -61,7 +65,6 @@ const LOCAL_ID = 'local'
 
 const NEXT_SECONDS = 5
 const SPEED_KEY = 'weread.tv.speed'
-const FAV_KEY = 'weread.tv.fav'
 
 const detail = ref<TvDetail>()
 const loading = ref(true)
@@ -79,27 +82,18 @@ const epIndex = ref(Number(route.query.e || 0))
 const screen = ref<HTMLElement>()
 const playerEl = ref<HTMLDivElement>()
 
-let player: Artplayer | null = null
-let hls: Hls | null = null
+let player: Player | null = null
 let lastSave = 0
 let countTimer = 0
 let startTimer = 0
 let started = false
-let netRetries = 0
-let mediaRetries = 0
 
-/* ---------- 自绘控制层状态 ---------- */
-/** 跟 artplayer 的 `control` 事件：true = 控制层该显示。 */
+/* ---------- 控制层状态 ---------- */
+/** 顶栏/锁屏按钮是否露出，跟 xgplayer 的 `xgplayer-inactive` 走。 */
 const ctrlVisible = ref(true)
 const playing = ref(false)
 const curTime = ref(0)
 const duration = ref(0)
-const dragging = ref(false)
-const dragRatio = ref(0)
-/** 「倍速」浮层（竖屏控制条 / 全屏控制行共用）。 */
-const rateOpen = ref(false)
-const danmakuOn = ref(true)
-const faved = ref(false)
 /**
  * 锁屏：锁定后控制层全部收起，只留左边的开锁按钮；画面上的点击不再
  * 切换播放/调进度（artplayer 的 `lock` 状态也一并置上，它自带的长按快进、
@@ -108,17 +102,21 @@ const faved = ref(false)
 const locked = ref(false)
 
 /**
- * 控制层是否露出（拖进度/开着浮层时别跟着自动隐藏一起消失）。
- * 锁定时一律收起——锁定按钮自己单独走 `lockVisible`。
+ * 顶栏是否露出。控制栏由 xgplayer 自己管，这里只跟着它的
+ * `xgplayer-inactive`（见 `watchControls`）走。
  */
-const uiShown = computed(() => !locked.value && (ctrlVisible.value || rateOpen.value || dragging.value))
-/** 锁按钮：控制层露出时用来上锁；锁定后常驻用来开锁。 */
-const lockVisible = computed(() => locked.value || uiShown.value)
+const uiShown = computed(() => !locked.value && ctrlVisible.value)
+/** 锁按钮：控制层露出时用来上锁；锁定后常驻用来开锁。投屏时没有可锁的画面。 */
+const lockVisible = computed(() => !castName.value && (locked.value || uiShown.value))
 
-const progress = computed(() => {
-  if (dragging.value) return dragRatio.value
-  return duration.value > 0 ? Math.min(1, curTime.value / duration.value) : 0
-})
+/** 竖屏选集先铺这么多格，余下的收在「展开全部」里（参考图也是这样）。 */
+const EPS_PREVIEW = 12
+const epsOpen = ref(false)
+
+/** 「01集」——集号补两位，网格里对齐才整齐。 */
+function epNum(index: number): string {
+  return `${String(index + 1).padStart(2, '0')}集`
+}
 
 const group = computed(() => detail.value?.groups[groupIndex.value])
 const episode = computed(() => group.value?.episodes[epIndex.value])
@@ -127,6 +125,10 @@ const nextEpisode = computed(() => group.value?.episodes[epIndex.value + 1])
 const otherGroups = computed(() => (detail.value?.groups.length || 0) > 1)
 
 /** 倒序只改展示顺序，点击时仍用原始下标。 */
+const visibleEps = computed(() =>
+  epsOpen.value ? orderedEps.value : orderedEps.value.slice(0, EPS_PREVIEW),
+)
+
 const orderedEps = computed(() => {
   const list = (group.value?.episodes || []).map((ep, index) => ({ ep, index }))
   return reversed.value ? list.reverse() : list
@@ -182,20 +184,28 @@ const tags = computed(() => {
   return [d.typeName, d.year, d.area, d.remarks].filter((x): x is string => !!x)
 })
 
+/* ---------- 控制层交互 ---------- */
+
 /**
- * 选集按钮上的短标签。
+ * 锁屏开关。
  *
- * CMS 给的集名五花八门：`第01集` / `HD国语版` / `正片`。命名里带数字就用数字
- * （参考图里的长视频 App 一律是编号方块），不带数字就退回「第几集」。
+ * 锁定后整个舞台不接收指针事件（`.tv-play__stage--locked`）：xgplayer 的
+ * 单击/双击/长按/拖动监听都挂在舞台里，这一下就全失效了，不用去改它的内部
+ * 状态。界面上只留右下角的开锁按钮。
  */
-function epLabel(name: string, index: number): string {
-  // 本地文件名里的数字多半是日期（2024-03-01 之类），当集号没有意义。
-  if (localMode) return String(index + 1)
-  const m = String(name || '').match(/(\d{1,4})/)
-  return m ? String(Number(m[1])) : String(index + 1)
+function toggleLock(): void {
+  locked.value = !locked.value
+  if (locked.value) {
+    // 上锁：把 xgplayer 的控制栏也收起来（它自己还会按暂停/报错重新弹出来，
+    // 所以 CSS 里另外压了一层，见 `.tv-play__screen--locked`）。
+    player?.blur()
+    ctrlVisible.value = false
+  } else {
+    // 解锁后主动把控制栏叫回来，不然画面光秃秃的还得再点一下。
+    player?.focus()
+  }
 }
 
-/** 切换分组：选中该分组并回到正序。 */
 function pickGroup(i: number): void {
   groupIndex.value = i
   reversed.value = false
@@ -213,140 +223,25 @@ function closeDrawer(): void {
   drawerOpen.value = false
 }
 
+const toastText = ref('')
+let toastTimer = 0
+
+/** 一句 1.8 秒的提示，自己画一层（不借播放器的 notice）。 */
+function toast(text: string): void {
+  toastText.value = text
+  clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => {
+    toastText.value = ''
+  }, 1800)
+}
+
+/** 上次用过的语速。 */
 function readSpeed(): number {
   const n = Number(localStorage.getItem(SPEED_KEY))
   return Number.isFinite(n) && n > 0 ? n : 1
 }
 
-function readFavs(): string[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(FAV_KEY) || '[]')
-    return Array.isArray(raw) ? raw.filter(x => typeof x === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-function toast(text: string): void {
-  if (player) player.notice.show = text
-}
-
-/* ---------- 控制层交互 ---------- */
-
-function togglePlay(): void {
-  if (!player) return
-  if (player.video.paused) void player.play()
-  else player.pause()
-}
-
-function setRate(v: number): void {
-  rate.value = v
-  if (player) player.playbackRate = v
-  localStorage.setItem(SPEED_KEY, String(v))
-  rateOpen.value = false
-}
-
-/**
- * 锁屏开关。
- *
- * 状态存在两个地方：本页的 `locked` 管界面（控制层收起、只留开锁按钮），
- * artplayer 的 `isLock` 管手势（它检查这个标记跳过双击播放、长按快进、拖动）。
- * 解锁后把控制层重新叫出来，不然画面光秃秃的要点一下才看到按钮。
- */
-function toggleLock(): void {
-  locked.value = !locked.value
-  if (!player) return
-  setPlayerLock(locked.value)
-  if (locked.value) {
-    player.controls.show = false
-  } else {
-    player.controls.show = true
-  }
-}
-
-/**
- * artplayer 的 `isLock` 决定它自带手势拦不拦截（单击/双击/长按快进/拖进度都查它）。
- * 类型声明里是 readonly，运行期就是普通属性；不写它锁屏就只是「把按钮藏起来」，
- * 双击照样会播/停。
- */
-function setPlayerLock(on: boolean): void {
-  if (!player) return
-  ;(player as unknown as { isLock: boolean }).isLock = on
-}
-
-function toggleDanmaku(): void {
-  danmakuOn.value = !danmakuOn.value
-}
-
-/** 弹幕设置 / 发弹幕：没有弹幕服务器，点了给一句说明而不是装死。 */
-function danmakuStub(): void {
-  toast('弹幕功能暂未开放')
-}
-
-/**
- * 收藏键：CMS 片子按「源 + 影片 id」，本地片子按文件名
- * （blob URL 每次都变，不能当身份用）。
- */
-function favKeyOf(): string {
-  return localMode ? `${LOCAL_ID}:${episode.value?.name || ''}` : `${sourceId}:${vodId}`
-}
-
-function toggleFav(): void {
-  const key = favKeyOf()
-  const list = readFavs()
-  const at = list.indexOf(key)
-  if (at >= 0) list.splice(at, 1)
-  else list.push(key)
-  localStorage.setItem(FAV_KEY, JSON.stringify(list))
-  faved.value = at < 0
-  toast(at < 0 ? '已收藏' : '已取消收藏')
-}
-
-async function share(): Promise<void> {
-  const text = `${detail.value?.name || ''}${episode.value?.name ? ' ' + episode.value.name : ''}`.trim()
-  const url = episode.value?.url || location.href
-  try {
-    if (navigator.share) {
-      await navigator.share({ title: detail.value?.name || '微读影视', text, url })
-      return
-    }
-    await navigator.clipboard.writeText(`${text}\n${url}`)
-    toast('已复制分享文案')
-  } catch {
-    /* 用户取消分享面板 */
-  }
-}
-
-/* ---------- 进度拖动 ---------- */
-
-function ratioFromEvent(e: PointerEvent): number {
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
-}
-
-function onSeekDown(e: PointerEvent): void {
-  if (!player) return
-  dragging.value = true
-  dragRatio.value = ratioFromEvent(e)
-  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-}
-
-function onSeekMove(e: PointerEvent): void {
-  if (!dragging.value) return
-  dragRatio.value = ratioFromEvent(e)
-}
-
-function onSeekUp(e: PointerEvent): void {
-  if (!dragging.value) return
-  dragging.value = false
-  if (player && duration.value > 0) player.currentTime = dragRatio.value * duration.value
-  try {
-    ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
-  } catch {
-    /* 已经松开 */
-  }
-}
+/* ---------- 进页面 ---------- */
 
 onMounted(async () => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
@@ -439,37 +334,16 @@ function isM3u8(url: string): boolean {
 /* ---------- 全屏 ---------- */
 
 /**
- * 让整个舞台（`.tv-play__screen`）进平台全屏。
+ * 退出平台全屏（返回键、系统手势、Esc 都走这里）。
  *
- * 不直接把 `fullscreen: true` 交给 artplayer，是因为它只会把 `.art-video-player`
- * 递上去：「即将播放下一集」「播放失败」这些卡片是播放器的兄弟节点，进全屏就
- * 一起被裁掉了。把整个舞台递上去，浮层还在，视觉上和原生播放器一样。
- *
+ * 进全屏由 xgplayer 的按钮发起，目标是我们整个舞台（见 `fullscreen.target`），
+ * 所以「即将播放下一集」「播放失败」这些兄弟浮层在全屏里也还在。
  * 状态栏和横屏都不在这里管 —— `MainActivity.FullscreenChromeClient` 收到
  * onShowCustomView 后隐藏系统栏、把 Activity 转成横屏；退出时再还回去。
  */
-async function enterFull(): Promise<void> {
-  const el = screen.value
-  if (!el || typeof el.requestFullscreen !== 'function') {
-    isFull.value = true
-    return
-  }
-  try {
-    await el.requestFullscreen()
-  } catch {
-    // 平台拒绝（没有用户手势 / iOS Safari）：至少把画面铺满，别让按钮变死键。
-    isFull.value = true
-  }
-}
-
 async function exitFull(): Promise<void> {
   if (document.fullscreenElement) await document.exitFullscreen().catch(() => {})
   isFull.value = false
-}
-
-async function toggleFullscreen(): Promise<void> {
-  if (isFull.value) await exitFull()
-  else await enterFull()
 }
 
 /** 平台全屏状态是唯一事实来源：Esc、系统手势退出时页面要跟上。 */
@@ -483,38 +357,29 @@ function onFullscreenChange(): void {
 
 /* ---------- 播放核心 ---------- */
 
-function playM3u8(video: HTMLVideoElement, url: string): void {
-  // 换集时 artplayer 会再次调用同一个 customType，旧实例必须先销毁。
-  hls?.destroy()
-  hls = null
-  netRetries = 0
-  mediaRetries = 0
+/**
+ * 控制层的显隐交给 xgplayer。
+ *
+ * 它自己会在根节点上切 `xgplayer-inactive`（单击、播放中 3 秒无操作都会切），
+ * 顶栏和锁屏按钮跟着这个 class 走，节奏就和播放条完全一致，不用自己算计时器。
+ */
+let classObserver: MutationObserver | null = null
 
-  if (Hls.isSupported()) {
-    const instance = new Hls({ maxBufferLength: 30, manifestLoadingTimeOut: 15000 })
-    hls = instance
-    instance.loadSource(url)
-    instance.attachMedia(video)
-    instance.on(Hls.Events.ERROR, (_event, data) => {
-      if (!data.fatal) return
-      // 源站/CDN 抖动是常态，多给自己几次机会；真播不出来再让用户换线路。
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries < 3) {
-        netRetries++
-        instance.startLoad()
-        return
-      }
-      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries < 2) {
-        mediaRetries++
-        instance.recoverMediaError()
-        return
-      }
-      fatal.value = '播放失败：源站拒绝或网络不通'
-    })
-  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = url
-  } else {
-    fatal.value = '当前设备不支持 HLS 播放'
+function watchControls(): void {
+  classObserver?.disconnect()
+  classObserver = null
+  const root = player?.root as HTMLElement | undefined
+  if (!root) return
+  /*
+   * 只在「正在播 + xgplayer 自己收起了控制栏」时才跟着藏。
+   * 它的初始状态就是 inactive，直接照抄的话顶栏和锁按钮一进页面就是隐形的。
+   */
+  const sync = (): void => {
+    ctrlVisible.value = !root.classList.contains('xgplayer-inactive') || !playing.value
   }
+  sync()
+  classObserver = new MutationObserver(sync)
+  classObserver.observe(root, { attributes: true, attributeFilter: ['class'] })
 }
 
 function mount(): void {
@@ -525,8 +390,6 @@ function mount(): void {
 
   // 本地模式下大标题就是当前文件名（CMS 模式下是片名，别动）。
   if (localMode && detail.value) detail.value.name = ep.name
-  // 收藏态跟着「当前在放的那个」走：CMS 下首次进入也要读一次。
-  faved.value = readFavs().includes(favKeyOf())
 
   const history = localMode ? undefined : store.historyOf(sourceId, vodId)
   const resumeAt =
@@ -534,36 +397,38 @@ function mount(): void {
       ? history.position
       : 0
 
-  player = new Artplayer({
-    container: playerEl.value,
+  player = new Player({
+    el: playerEl.value,
+    /*
+     * 必须显式给百分比：xgplayer 的默认配置里写死了 600×337.5，不给就按这个
+     * 尺寸铺在舞台左上角（竖屏 400 宽时画面比换行还宽，横屏也对不上）。
+     */
+    width: '100%',
+    height: '100%',
     url: ep.url,
-    type: isM3u8(ep.url) ? 'm3u8' : '',
     poster: detail.value?.pic || '',
     autoplay: true,
-    playsInline: true,
+    playsinline: true,
+    // 控制栏用 xgplayer 自带的（进度条、倍速、清晰度、全屏都是它做好的）。
+    controls: true,
+    /**
+     * 不要的几个：手机上调音量是硬件键的事，下载/截屏/画中画在这个 App 里
+     * 没有去处。留着的都是真能用的（播放、进度、时间、倍速、清晰度、全屏）。
+     */
+    ignores: ['pip', 'download', 'screenShot', 'volume'],
     lang: 'zh-cn',
-    theme: '#3e6bf0',
-    // 自带能力：不自己写触摸逻辑，见文件头注释。
-    gesture: true,
-    fastForward: true,
-    lock: true,
-    // 控制栏整层藏掉由本页自绘；自带的设置/倍速/画中画按钮也就不用再摘。
-    setting: false,
-    playbackRate: false,
-    // 全屏由页面接管：播放器自带的那个在 WebView 里点了没反应，也不转屏。
-    fullscreen: false,
-    fullscreenWeb: false,
-    // WebView 里的画中画没有系统入口，留着只会占一格控制栏。
-    // 音量同理：手机上调音量是硬件键的事，控制栏里那个喇叭在大屏上才有意义。
-    pip: false,
-    miniProgressBar: true,
-    hotkey: true,
-    customType: { m3u8: playM3u8 },
+    // HLS 由插件接管：它自己带一份 hls.js（light 版），不用我们再喂 video。
+    plugins: [HlsJsPlugin],
+    /*
+     * 全屏按钮是 xgplayer 的，但目标必须是我们整个舞台：它默认只把自己的
+     * 根节点递上去，「即将播放下一集」「播放失败」这些兄弟浮层就一起被裁掉了。
+     */
+    fullscreen: { target: screen.value || undefined },
   })
 
+  started = false
+  watchControls()
   player.playbackRate = rate.value
-  // 换集会重建 player，锁的是「这个播放器」，新实例要重新挂上。
-  setPlayerLock(locked.value)
   player.on('ready', () => {
     started = true
     clearTimeout(startTimer)
@@ -571,42 +436,35 @@ function mount(): void {
     fatal.value = ''
     if (resumeAt > 3 && player) player.currentTime = resumeAt
   })
-  player.on('control', (show: boolean) => {
-    ctrlVisible.value = show
-    if (!show) rateOpen.value = false
-  })
-  // 播放状态跟 video 元素本身：artplayer 的 `play`/`pause` 事件只在它自己的
-  // API 方法里发，外部直接 `video.pause()`（快捷键、系统打断）不会发，图标会停错。
-  player.on('video:play', () => {
+  // 播放状态取 video 元素本身：xgplayer 代理了原生事件，所以快捷键、
+  // 系统打断这类「不是它自己 API 发起的」暂停也能把图标改对。
+  player.on('play', () => {
     playing.value = true
   })
-  player.on('video:pause', () => {
-    playing.value = false
-  })
-  // artplayer 在 play()/pause() 里会用 notice 闪一下「播放 / 暂停」文字，
-  // 跟自绘控制层的图标重复。这两个事件总在写入 notice 之后发出，这里立刻抹掉；
-  // 拖动进度的时间提示（notice 的另一个用途）不受影响。
-  player.on('play', () => {
-    if (player) player.notice.show = ''
-  })
   player.on('pause', () => {
-    if (player) player.notice.show = ''
+    playing.value = false
+    // 暂停时控制栏和顶栏都该在。
+    ctrlVisible.value = true
   })
-  player.on('video:timeupdate', onTimeUpdate)
-  player.on('video:durationchange', syncClock)
-  player.on('video:loadedmetadata', syncClock)
-  player.on('video:ratechange', onRateChange)
-  player.on('video:ended', onEnded)
-  player.on('video:error', () => {
-    // hls.js 会自己上报可恢复/不可恢复的错误；这里只兜底直链 mp4。
-    // 本地文件最常见的失败是容器/编码不被 WebView 支持（mkv、avi 之类），
-    // 说「加载失败请重试」会让人反复重试一个永远放不了的文件。
-    if (!isM3u8(ep.url)) {
-      fatal.value = localMode ? '这个文件播不了，可能是系统不支持它的封装格式' : '视频加载失败，请重试'
+  player.on('timeupdate', onTimeUpdate)
+  player.on('durationchange', syncClock)
+  player.on('loadedmetadata', syncClock)
+  player.on('ratechange', onRateChange)
+  player.on('ended', onEnded)
+  player.on('error', () => {
+    /*
+     * 本地文件最常见的失败是容器/编码不被 WebView 支持（mkv、avi 之类），
+     * 说「加载失败请重试」会让人反复重试一个永远放不了的文件。
+     * 在线源在还没出画面时的错误才是真的播不出来。
+     */
+    if (isM3u8(ep.url)) {
+      if (!started) fatal.value = '播放失败：源站拒绝或网络不通'
+      return
     }
+    fatal.value = localMode ? '这个文件播不了，可能是系统不支持它的封装格式' : '视频加载失败，请重试'
   })
   syncClock()
-  if (player.video) playing.value = !player.video.paused
+  playing.value = !player.paused
 
   // 正在投屏时换集：电视上也要跟着换，否则手机在放第 2 集、电视还是第 1 集。
   if (castTarget.value) {
@@ -622,16 +480,6 @@ function mount(): void {
   startTimer = window.setTimeout(() => {
     if (!started) fatal.value = '长时间没有画面，请重试'
   }, 30000)
-}
-
-/** 秒 → 00:08 / 1:02:03 */
-function clock(sec: number): string {
-  const s = Math.max(0, Math.floor(sec || 0))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const r = s % 60
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return h ? `${h}:${pad(m)}:${pad(r)}` : `${pad(m)}:${pad(r)}`
 }
 
 function syncClock(): void {
@@ -681,9 +529,10 @@ function saveProgress(): void {
 }
 
 function destroyPlayer(): void {
-  hls?.destroy()
-  hls = null
-  player?.destroy(false)
+  classObserver?.disconnect()
+  classObserver = null
+  // xgplayer 的 destroy 会连 video 元素和 HLS 一起收掉，不用自己再拆一层。
+  player?.destroy()
   player = null
   clearTimeout(startTimer)
 }
@@ -789,14 +638,6 @@ function handleCloseCast(): void {
   castOpen.value = false
 }
 
-function handleToggleRate(): void {
-  rateOpen.value = !rateOpen.value
-}
-
-function handleNext(): void {
-  next()
-}
-
 function handlePickEpisode(row: { index: number }): void {
   pickEpisode(row.index)
 }
@@ -821,6 +662,9 @@ function handlePickEpisode(row: { index: number }): void {
           容器占位（浮动层本身是播放器视觉的一部分），开关与输入框在控制行里。
         -->
         <div class="tv-play__dm" aria-hidden="true" />
+
+        <!-- 一句提示（弹幕未开放之类）。以前借播放器的 notice，现在自己画一层。 -->
+        <p v-if="toastText" class="tv-play__toast">{{ toastText }}</p>
 
         <!--
           顶部层：左「返回」，右「投屏」（竖屏与全屏同一颗，功能就是投屏面板）。
@@ -860,138 +704,17 @@ function handlePickEpisode(row: { index: number }): void {
               <circle cx="7.4" cy="17.6" r="0.9" fill="currentColor" stroke="none" />
             </svg>
           </button>
-        </div>
-
-        <!-- 竖屏控制条：暂停 · 当前时间 · 进度 · 总长 · 全屏（参考图的单行版式） -->
-        <div
-          v-if="!isFull"
-          class="tv-play__bar tv-play__bar--mini"
-          :class="{ 'tv-play__layer--off': !uiShown }"
-        >
-          <button class="tv-play__ico" :aria-label="playing ? '暂停' : '播放'" @click.stop="togglePlay">
-            <MorphIcon :name="playing ? 'pause' : 'play'" :size="22" :width="2.1" />
-          </button>
-          <span class="tv-play__time">{{ clock(curTime) }}</span>
-          <div
-            class="tv-play__track"
-            @pointerdown.stop="onSeekDown"
-            @pointermove.stop="onSeekMove"
-            @pointerup.stop="onSeekUp"
-            @pointercancel.stop="onSeekUp"
+          <!--
+            竖屏正文里已经有选集网格，这里只在全屏出现——全屏看不到正文，
+            抽屉是唯一能换集的入口。
+          -->
+          <button
+            v-if="isFull && detail && (orderedEps.length > 1 || detail.groups.length > 1)"
+            class="tv-play__txt"
+            @click.stop="openDrawer"
           >
-            <div class="tv-play__track-run">
-              <div class="tv-play__track-played" :style="{ width: progress * 100 + '%' }" />
-              <div class="tv-play__thumb" :style="{ left: progress * 100 + '%' }" />
-            </div>
-          </div>
-          <span class="tv-play__time">{{ clock(duration) }}</span>
-          <button class="tv-play__txt" @click.stop="handleToggleRate">倍速</button>
-          <button class="tv-play__ico" aria-label="全屏" @click.stop="toggleFullscreen">
-            <Icon name="expand" :size="20" />
+            选集
           </button>
-        </div>
-
-        <!--
-          全屏控制层：进度行（两端贴时间）+ 控制行。
-          参考图控制行是「暂停 · 下一集 · 弹幕开关 · 弹幕设置 · 发弹幕框 ·
-          只看TA · 倍速 · 1080P SDR · 选集」——「只看TA」是会员功能、「1080P SDR」
-          是清晰度菜单（采集源一条线路一个地址，切不了清晰度），都不做。
-          倍速 / 投屏 / 选集是真能用的，留在右端。
-          注意这行必须紧跟着 v-if 的竖屏控制条（v-else 只认紧邻的上一个兄弟），
-          中间插任何元素都会让整条全屏控制行失效。
-        -->
-        <div v-else class="tv-play__bar tv-play__bar--full" :class="{ 'tv-play__layer--off': !uiShown }">
-          <div class="tv-play__progress-row">
-            <span class="tv-play__time">{{ clock(curTime) }}</span>
-            <div
-              class="tv-play__track"
-              @pointerdown.stop="onSeekDown"
-              @pointermove.stop="onSeekMove"
-              @pointerup.stop="onSeekUp"
-              @pointercancel.stop="onSeekUp"
-            >
-              <div class="tv-play__track-run">
-                <div class="tv-play__track-played" :style="{ width: progress * 100 + '%' }" />
-                <div class="tv-play__thumb" :style="{ left: progress * 100 + '%' }" />
-              </div>
-            </div>
-            <span class="tv-play__time">{{ clock(duration) }}</span>
-          </div>
-
-          <div class="tv-play__ctrl-row">
-            <button class="tv-play__ico" :aria-label="playing ? '暂停' : '播放'" @click.stop="togglePlay">
-              <MorphIcon :name="playing ? 'pause' : 'play'" :size="22" :width="2.1" />
-            </button>
-            <button v-if="hasNext" class="tv-play__ico" aria-label="下一集" @click.stop="handleNext">
-              <Icon name="skip-forward" :size="21" />
-            </button>
-
-            <button
-              class="tv-play__dm-btn"
-              :class="{ 'tv-play__dm-btn--on': danmakuOn }"
-              aria-label="弹幕开关"
-              @click.stop="toggleDanmaku"
-            >
-              弹
-              <span v-if="danmakuOn" class="tv-play__dm-badge">
-                <svg
-                  width="8"
-                  height="8"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#fff"
-                  stroke-width="3.4"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M4.8 12.6l4.6 4.6 9.8-10.4" />
-                </svg>
-              </span>
-            </button>
-            <button class="tv-play__dm-btn" aria-label="弹幕设置" @click.stop="danmakuStub">
-              弹
-              <svg
-                class="tv-play__dm-gear"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-              >
-                <circle cx="12" cy="12" r="3.2" />
-                <path d="M12 3.4v2.2M12 18.4v2.2M3.4 12h2.2M18.4 12h2.2" />
-              </svg>
-            </button>
-            <button class="tv-play__dm-input" @click.stop="danmakuStub">点我发弹幕~</button>
-
-            <span class="tv-play__row-gap" />
-
-            <button class="tv-play__txt" @click.stop="handleToggleRate">倍速</button>
-            <button
-              v-if="showCast && !localMode"
-              class="tv-play__ico tv-play__ico--sm"
-              aria-label="投屏"
-              @click.stop="handleOpenCast"
-            >
-              <svg
-                width="19"
-                height="19"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <rect x="3" y="5" width="18" height="13" rx="2.4" />
-                <path d="M7.2 14.6a3.2 3.2 0 013.2 3.2M7.2 11a6.8 6.8 0 016.8 6.8" />
-                <circle cx="7.4" cy="17.6" r="0.9" fill="currentColor" stroke="none" />
-              </svg>
-            </button>
-            <button class="tv-play__txt" @click.stop="openDrawer">选集</button>
-          </div>
         </div>
 
         <!--
@@ -1008,19 +731,6 @@ function handlePickEpisode(row: { index: number }): void {
         >
           <Icon :name="locked ? 'lock' : 'unlock'" :size="20" />
         </button>
-
-        <!-- 倍速浮层：竖屏控制条 / 全屏控制行共用 -->
-        <div v-if="rateOpen" class="tv-play__rates" @click.stop>
-          <button
-            v-for="r in [0.5, 0.75, 1, 1.25, 1.5, 2]"
-            :key="r"
-            class="tv-play__rate"
-            :class="{ 'tv-play__rate--on': rate === r }"
-            @click.stop="setRate(r)"
-          >
-            {{ r }}x
-          </button>
-        </div>
 
         <div v-if="loading" class="tv-play__state">正在加载…</div>
         <div v-else-if="error" class="tv-play__state tv-play__state--error">{{ error }}</div>
@@ -1145,58 +855,6 @@ function handlePickEpisode(row: { index: number }): void {
           <span v-for="t in tags" :key="t" class="tv-play__tag">{{ t }}</span>
         </div>
 
-        <div class="tv-play__actions">
-          <!-- 本地片没有可分享的链接，分享按钮只在点播模式出现。 -->
-          <button v-if="!localMode" class="tv-play__action" @click="share">
-            <Icon name="share" :size="24" />
-            <span class="tv-play__action-label">分享</span>
-          </button>
-          <button class="tv-play__action" :class="{ 'tv-play__action--on': faved }" @click="toggleFav">
-            <Icon name="heart" :size="24" />
-            <span class="tv-play__action-label">{{ faved ? '已收藏' : '收藏' }}</span>
-          </button>
-        </div>
-
-        <section v-if="orderedEps.length > 1 || detail.groups.length > 1" class="tv-play__eps">
-          <div v-if="detail.groups.length > 1" class="tv-play__groups">
-            <button
-              v-for="(g, i) in detail.groups"
-              :key="g.name + i"
-              class="tv-play__group"
-              :class="{ 'tv-play__group--active': i === groupIndex }"
-              @click="pickGroup(i)"
-            >
-              {{ g.name }}（{{ g.episodes.length }}）
-            </button>
-          </div>
-
-          <div class="tv-play__eps-head">
-            <span class="tv-play__eps-title">选集</span>
-            <button class="tv-play__eps-all" @click="openDrawer">
-              {{ orderedEps.length }} 集全
-              <Icon name="chevron-right" :size="12" :width="2" />
-            </button>
-          </div>
-
-          <div class="tv-play__eps-strip">
-            <button
-              v-for="row in orderedEps"
-              :key="row.ep.url"
-              class="tv-play__ep-btn"
-              :class="{ 'tv-play__ep-btn--active': row.index === epIndex }"
-              :aria-label="row.ep.name"
-              :aria-current="row.index === epIndex ? 'true' : undefined"
-              @click="handlePickEpisode(row)"
-            >
-              <!-- 正在播的那一格：参考图是三根橙红竖条（均衡器）压在浅粉底上 -->
-              <span v-if="row.index === epIndex" class="tv-play__ep-eq" aria-hidden="true">
-                <i /><i /><i />
-              </span>
-              <template v-else>{{ epLabel(row.ep.name, row.index) }}</template>
-            </button>
-          </div>
-        </section>
-
         <section v-if="detail.desc" class="tv-play__desc" :class="{ 'tv-play__desc--open': descOpen }">
           <h2 class="tv-play__desc-title">简介</h2>
           <p class="tv-play__desc-text">{{ detail.desc }}</p>
@@ -1204,6 +862,46 @@ function handlePickEpisode(row: { index: number }): void {
             {{ descOpen ? '收起' : '展开' }}
           </button>
         </section>
+
+        <!--
+          选集照参考图：标题 + 集数 + 正序，网格先铺几行，余下的收在
+          「展开全部 N 集」里。全屏那套抽屉不动（进全屏后由顶栏「选集」打开）。
+        -->
+        <section v-if="orderedEps.length > 1" class="tv-play__eps">
+          <div class="tv-play__eps-head">
+            <span class="tv-play__eps-title">选集</span>
+            <span class="tv-play__eps-count">{{ orderedEps.length }} 集</span>
+            <button class="tv-play__eps-order" @click="toggleOrder">
+              {{ reversed ? '倒序' : '正序' }}
+            </button>
+          </div>
+          <div class="tv-play__eps-grid">
+            <button
+              v-for="row in visibleEps"
+              :key="row.ep.url"
+              class="tv-play__ep"
+              :class="{ 'tv-play__ep--on': row.index === epIndex }"
+              @click="handlePickEpisode(row)"
+            >
+              {{ epNum(row.index) }}
+            </button>
+          </div>
+          <button
+            v-if="orderedEps.length > EPS_PREVIEW"
+            class="tv-play__eps-more"
+            @click="epsOpen = !epsOpen"
+          >
+            {{ epsOpen ? '收起' : `展开全部 ${orderedEps.length} 集` }}
+            <Icon
+              name="chevron-right"
+              :size="12"
+              :width="2"
+              class="tv-play__eps-more-icon"
+              :class="{ 'tv-play__eps-more-icon--open': epsOpen }"
+            />
+          </button>
+        </section>
+
       </template>
     </main>
   </div>
@@ -1257,8 +955,7 @@ function handlePickEpisode(row: { index: number }): void {
   position: absolute;
   inset: 0 0 32% 0;
   /*
-   * z 必须高于 artplayer 的 `.art-video`（10），否则弹幕飘在画面下面；
-   * 又低于控制层（30）。artplayer 自己的 `.art-danmuku` 也是 30 这一档。
+   * z 必须高于播放器根节点（画面），否则弹幕会飘在视频下面；又低于控制层。
    */
   z-index: 20;
   pointer-events: none;
@@ -1499,7 +1196,7 @@ function handlePickEpisode(row: { index: number }): void {
   position: absolute;
   right: calc(10px + var(--safe-right));
   bottom: calc(52px + var(--safe-bottom));
-  /* 必须压过 artplayer 的 `.art-video`（z-index:10）：不写 z 的浮层会被画面
+  /* 必须压过播放器画面：不写 z 的浮层会被画面
      盖住——看不见选项，点击还穿到视频上变成切换播放。 */
   z-index: 33;
   display: flex;
@@ -1561,17 +1258,22 @@ function handlePickEpisode(row: { index: number }): void {
   background: rgba(255, 255, 255, 0.22);
 }
 
-/* 投屏浮层：盖住画面，说明「现在电视在放」 */
+/*
+ * 投屏浮层：盖住画面，说明「现在电视在放」。
+ * 必须是实底 —— 半透明时底下停住的那一帧会透上来，字和画面叠在一起看不清。
+ * z 压在播放器控制栏之上、顶栏（30）之下：投屏时不该还留着播放按钮，
+ * 但「返回」必须点得到，否则用户只能靠系统返回键离开这一页。
+ */
 .tv-play__casting {
   position: absolute;
   inset: 0;
-  z-index: 20;
+  z-index: 25;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background: rgba(0, 0, 0, 0.8);
+  background: #0e0e11;
   color: #fff;
   text-align: center;
   padding: 0 24px;
@@ -1599,40 +1301,64 @@ function handlePickEpisode(row: { index: number }): void {
 }
 
 /*
- * artplayer 自带的控制栏整层藏掉：控件排版由上面的自绘层负责，
- * 但手势（单击显隐 / 双击播放 / 拖动进度 / 长按快进）和锁屏层还是它的。
+ * xgplayer 这边是 `controls: false`，控制栏根本不渲染；下面的 `:deep` 只兜
+ * 住它自己会插的那几层（海报、加载圈），免得和自绘层叠在一起。
+ * 竖版海报放进 16:9 的框里会被左右留黑，按 cover 裁更像正常封面。
  */
-.tv-play__screen :deep(.art-bottom) {
-  display: none !important;
-}
-
-/*
- * artplayer 自带的左侧锁层整层不用：它的位置贴着屏幕边缘，横屏时会被挖孔
- * 摄像头挡住，而且跟自绘控制层的显隐节奏不同步。锁屏按钮由本页自绘
- * （`.tv-play__lock`），位置在安全区再往里 24px。
- */
-.tv-play__screen :deep(.art-layer-lock) {
-  display: none !important;
-}
-
-/* 竖版海报放进 16:9 的框里会被左右留黑，按 cover 裁更像正常封面。 */
-.tv-play__screen :deep(.art-poster) {
+.tv-play__screen :deep(.xgplayer-poster) {
   object-fit: cover;
+  background-size: cover;
 }
 
-/* 播放失败时 artplayer 的加载圈还转着，会和错误卡片叠在一起。 */
-.tv-play__screen--fatal :deep(.art-loading) {
+/* 加载圈用自绘卡片代替，别和「正在加载…」「播放失败」两层文字打架。 */
+.tv-play__screen :deep(.xgplayer-loading),
+.tv-play__screen :deep(xg-loading) {
+  display: none;
+}
+
+/* 播放失败时播放器的加载圈还转着，会和错误卡片叠在一起。 */
+.tv-play__screen--fatal :deep(.xgplayer-loading),
+.tv-play__screen--fatal :deep(xg-loading) {
   display: none;
 }
 
 /*
- * 锁定时把画面中央的大播放键（artplayer 的 `.art-state`）也藏掉：它自带点击
- * 播放，artplayer 没给它加 isLock 检查，留着就是锁屏上的一个后门。
+ * 锁屏：整个舞台不接收指针事件。xgplayer 的单击/双击/长按/拖动监听全挂在
+ * 舞台里，这一条等于一次性把它们关掉，不用去改它的内部状态。
  */
-.tv-play__screen--locked :deep(.art-mask) {
-  display: none;
+.tv-play__screen--locked .tv-play__stage {
+  pointer-events: none;
 }
 
+/*
+ * 控制栏不能只靠 `player.blur()` 收：xgplayer 在暂停、报错、播完这些时机
+ * 会自己把控制栏弹回来。锁屏期间直接压住它，解锁后才恢复。
+ */
+.tv-play__screen--locked :deep(.xgplayer-controls) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 一句提示，位置和播放器的 prompt 一致：画面上方三分之一处。 */
+.tv-play__toast {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  margin: 0;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  font-size: 13px;
+  color: #fff;
+  pointer-events: none;
+}
+
+/*
+ * 选集入口：一条可点的行，视觉上像列表项（标题 + 副标题 + 箭头），
+ * 点开才是抽屉。原来这里还铺了一整行集数按钮，同一件事两个形态，去掉了。
+ */
 /* ---------- 状态与卡片 ---------- */
 
 .tv-play__state {
@@ -1643,7 +1369,7 @@ function handlePickEpisode(row: { index: number }): void {
   justify-content: center;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.65);
-  /* 高于 `.art-video`（10）：出错/加载文字要压在画面之上 */
+  /* 高于播放器画面：出错/加载文字要压在画面之上 */
   z-index: 20;
 }
 .tv-play__state--error {
@@ -1655,7 +1381,7 @@ function handlePickEpisode(row: { index: number }): void {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  /* 高于 `.art-video`（10）：错误卡片要盖住画面，而不是被画面盖住 */
+  /* 高于播放器画面：错误卡片要盖住画面，而不是被画面盖住 */
   z-index: 24;
   width: min(78%, 300px);
   padding: 16px 14px;
@@ -1696,7 +1422,7 @@ function handlePickEpisode(row: { index: number }): void {
   right: 10px;
   /* 抬到控制层上面：贴着底边会压住「倍速 / 选集」那一排。 */
   bottom: calc(58px + var(--safe-bottom));
-  /* 高于 `.art-video`（10）：连播卡片要盖住画面（参考图的浮层都在画面之上） */
+  /* 高于播放器画面：连播卡片要盖住画面（参考图的浮层都在画面之上） */
   z-index: 24;
   width: min(72%, 280px);
   padding: 10px 12px;
@@ -1814,43 +1540,12 @@ function handlePickEpisode(row: { index: number }): void {
   white-space: nowrap;
 }
 
-/* 操作行：参考图是「图标在上、文字在下」的等距一排。没有后端的评论/下载不画。 */
-.tv-play__actions {
-  display: flex;
-  gap: 28px;
-  margin-top: 16px;
-}
-.tv-play__action {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  min-width: 44px;
-  color: var(--text);
-}
-.tv-play__action--on {
-  color: var(--accent);
-}
-.tv-play__action-label {
-  font-size: calc(12px * var(--app-font-scale));
-  color: var(--text-secondary);
-}
-
 /* ---------- 选集 ---------- */
 
 .tv-play__eps {
   padding-top: 18px;
 }
-.tv-play__groups {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 12px;
-  scrollbar-width: none;
-}
-.tv-play__groups::-webkit-scrollbar {
-  display: none;
-}
+/* 抽屉里的线路切换按钮；页面正文里不再有这一排。 */
 .tv-play__group {
   flex: 0 0 auto;
   border: 1px solid var(--divider);
@@ -1866,88 +1561,80 @@ function handlePickEpisode(row: { index: number }): void {
   background: var(--accent-soft);
   color: var(--accent-on-soft);
 }
-
-.tv-play__eps-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
-}
 .tv-play__eps-title {
   font-size: calc(17px * var(--app-font-scale));
   font-weight: 600;
   color: var(--text);
 }
-/* 「18 集全 ›」在参考图里是右侧的浅灰小字，点开完整选集 */
-.tv-play__eps-all {
+/* 集数在标题右侧，正序/倒序贴在行尾（参考图就是这一行三个元素）。 */
+.tv-play__eps-head {
   display: flex;
   align-items: center;
-  gap: 1px;
-  height: 32px;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tv-play__eps-count {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(12px * var(--app-font-scale));
   color: var(--text-secondary);
-  font-size: calc(13px * var(--app-font-scale));
 }
-
-.tv-play__eps-strip {
-  display: flex;
-  gap: 9px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  scrollbar-width: none;
+.tv-play__eps-order {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: calc(12px * var(--app-font-scale));
+  font-family: inherit;
 }
-
-.tv-play__eps-strip::-webkit-scrollbar {
-  display: none;
+.tv-play__eps-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
-
-/*
- * 编号方块：参考图里芒果是用方块网格选集的（约 46×44、8 圆角、浅灰底），
- * 长名字（HD国语版）塞不进一行，就只显编号。
- */
-.tv-play__ep-btn {
-  flex: 0 0 auto;
-  width: 46px;
+.tv-play__ep {
   height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  font-size: calc(13px * var(--app-font-scale));
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+/*
+ * 正在播的那一集：浅粉底 + 橙红字。颜色跟参考图一致（不是品牌蓝），
+ * 和锁屏/连播那套「播放中」的标记色也统一。
+ */
+.tv-play__ep--on {
+  background: rgba(255, 92, 61, 0.14);
+  color: #ff5c3d;
+}
+.tv-play__eps-more {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 40px;
+  margin-top: 10px;
+  border: 0;
   border-radius: 8px;
   background: var(--bg-secondary);
-  border: 0;
-  color: var(--text);
-  font-size: calc(17px * var(--app-font-scale));
-  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  font-size: calc(13px * var(--app-font-scale));
+  font-family: inherit;
 }
-
-/*
- * 正在播的那一格：参考图是浅粉底 + 橙红均衡器三竖条。
- * 颜色跟着参考图走（不是品牌蓝）——这是「播放中」的状态标记。
- */
-.tv-play__ep-btn--active {
-  background: rgba(255, 92, 61, 0.12);
+.tv-play__eps-more:active {
+  opacity: 0.75;
 }
-
-.tv-play__ep-eq {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 16px;
+.tv-play__eps-more-icon {
+  transition: transform 0.18s ease;
 }
-
-.tv-play__ep-eq i {
-  width: 3.5px;
-  border-radius: 1px;
-  background: #ff5c3d;
-}
-.tv-play__ep-eq i:nth-child(1) {
-  height: 11px;
-}
-.tv-play__ep-eq i:nth-child(2) {
-  height: 16px;
-}
-.tv-play__ep-eq i:nth-child(3) {
-  height: 8px;
+.tv-play__eps-more-icon--open {
+  transform: rotate(90deg);
 }
 
 /* ---------- 简介 ---------- */

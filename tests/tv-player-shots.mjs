@@ -195,8 +195,8 @@ try {
   // 全屏入口在竖屏控制条上；布局已经切到横屏几何，直接点按钮走真实全屏流程。
   await sleep(400)
   await page.evaluate(`(() => {
-    const btn = document.querySelector('.tv-play__bar--mini button[aria-label="全屏"]')
-    if (btn) btn.click()
+    const btn = document.querySelector('.xgplayer-fullscreen')
+    if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     return !!btn
   })()`)
   await sleep(800)
@@ -208,24 +208,21 @@ try {
   console.log('横屏全屏 →', join(OUT, 'tv-player-landscape.png'))
 
   // 倍速浮层：验它在画面之上、点得到（曾经被 .art-video 的 z-index:10 压住）
-  await page.evaluate(`[...document.querySelectorAll('.tv-play__txt')].find(b => b.textContent.includes('倍速'))?.click(); true`)
+  await page.evaluate(`document.querySelector('.xgplayer-playbackrate')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); true`)
   await sleep(400)
   await page.screenshot(join(OUT, 'tv-player-landscape-rate.png'))
   const rateVisible = await page.evaluate(`(() => {
-    const el = document.querySelector('.tv-play__rates')
+    const el = document.querySelector('.xgplayer-playbackrate-list, [class*="playbackrate-list"]')
     if (!el) return 'absent'
     const r = el.getBoundingClientRect()
     const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
     return { inViewport: r.width > 0, hitIsRates: hit === el || el.contains(hit) }
   })()`)
   console.log('倍速浮层命中测试:', JSON.stringify(rateVisible))
-  await page.evaluate(`document.querySelector('.tv-play__rate--on')?.click(); true`)
   await sleep(300)
 
   // 全屏下打开选集抽屉：验它没被 :fullscreen 层盖住
-  await page.evaluate(`document.querySelector('.tv-play__bar--full button[aria-label="选集"]')?.click
-    ? document.querySelector('.tv-play__bar--full button[aria-label="选集"]').click()
-    : [...document.querySelectorAll('.tv-play__txt')].find(b => b.textContent.includes('选集'))?.click(); true`)
+  await page.evaluate(`[...document.querySelectorAll('.tv-play__txt')].find(b => b.textContent.includes('选集'))?.click(); true`)
   await sleep(500)
   await page.screenshot(join(OUT, 'tv-player-landscape-drawer.png'))
   console.log('全屏选集抽屉 →', join(OUT, 'tv-player-landscape-drawer.png'))
@@ -245,7 +242,7 @@ try {
 
   const state = await page.evaluate(`(() => ({
     isFull: !!document.fullscreenElement,
-    hasFullBar: !!document.querySelector('.tv-play__bar--full'),
+    hasControls: !!document.querySelector('.xgplayer-controls'),
     fatal: document.querySelector('.tv-play__fatal-text')?.textContent || '',
   }))()`)
   console.log('状态:', JSON.stringify(state))

@@ -153,7 +153,24 @@ function handleToggleShowAll(): void {
     </header>
 
     <main class="tv-detail__body">
-      <div v-if="loading" class="tv-detail__state">正在加载…</div>
+      <!--
+        骨架屏：形状照着真实版式来（封面 + 三行文字 + 主按钮 + 选集网格），
+        加载完直接换成内容，不会从「一行字」跳成一大块排版。
+      -->
+      <div v-if="loading" class="tv-detail__skeleton" aria-hidden="true">
+        <div class="tv-sk__hero">
+          <span class="tv-sk tv-sk--cover" />
+          <div class="tv-sk__lines">
+            <span class="tv-sk tv-sk--name" />
+            <span class="tv-sk tv-sk--meta" />
+            <span class="tv-sk tv-sk--tag" />
+          </div>
+        </div>
+        <span class="tv-sk tv-sk--action" />
+        <div class="tv-sk__grid">
+          <span v-for="n in 12" :key="n" class="tv-sk tv-sk--chip" />
+        </div>
+      </div>
       <div v-else-if="error" class="tv-detail__state tv-detail__state--error">{{ error }}</div>
 
       <template v-else-if="detail">
@@ -301,9 +318,89 @@ function handleToggleShowAll(): void {
   color: #d9534f;
 }
 
+/*
+ * 骨架屏：底色用 --bg-secondary，扫光用中性灰（半透明，浅色/深色主题都能看见）。
+ * 只动 background-position，不触发重排；开了「减少动态效果」就定格。
+ */
+.tv-detail__skeleton {
+  padding: calc(62px + var(--safe-top)) 16px 24px;
+}
+.tv-sk {
+  display: block;
+  border-radius: 6px;
+  background-color: var(--bg-secondary);
+  background-image: linear-gradient(
+    90deg,
+    rgba(127, 127, 127, 0) 0%,
+    rgba(127, 127, 127, 0.18) 50%,
+    rgba(127, 127, 127, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: tv-sk-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes tv-sk-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tv-sk {
+    animation: none;
+  }
+}
+.tv-sk__hero {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+}
+.tv-sk--cover {
+  flex: 0 0 auto;
+  width: 104px;
+  height: 146px;
+  border-radius: 8px;
+}
+.tv-sk__lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 6px;
+}
+.tv-sk--name {
+  width: 72%;
+  height: 20px;
+}
+.tv-sk--meta {
+  width: 52%;
+  height: 12px;
+}
+.tv-sk--tag {
+  width: 40%;
+  height: 18px;
+  border-radius: 9px;
+}
+.tv-sk--action {
+  height: 44px;
+  margin-top: 22px;
+  border-radius: 8px;
+}
+.tv-sk__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+}
+.tv-sk--chip {
+  width: calc((100% - 24px) / 4);
+  height: 38px;
+}
+
 .tv-hero {
   position: relative;
-  padding: calc(52px + var(--safe-top)) 16px 14px;
+  padding: calc(62px + var(--safe-top)) 16px 24px;
   overflow: hidden;
 }
 .tv-hero__glow {
@@ -312,7 +409,7 @@ function handleToggleShowAll(): void {
   background-size: cover;
   background-position: center;
   filter: blur(26px) saturate(1.2);
-  opacity: 0.4;
+  /* opacity: 0.4; */
   transform: scale(1.1);
   pointer-events: none;
 }

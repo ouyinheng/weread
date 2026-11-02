@@ -196,14 +196,25 @@ const tags = computed(() => {
 function toggleLock(): void {
   locked.value = !locked.value
   if (locked.value) {
-    // 上锁：把 xgplayer 的控制栏也收起来（它自己还会按暂停/报错重新弹出来，
-    // 所以 CSS 里另外压了一层，见 `.tv-play__screen--locked`）。
     player?.blur()
+    setControlsHidden(true)
     ctrlVisible.value = false
   } else {
-    // 解锁后主动把控制栏叫回来，不然画面光秃秃的还得再点一下。
+    setControlsHidden(false)
     player?.focus()
   }
+}
+
+/**
+ * 把 xgplayer 的控制栏从 DOM 上藏掉/放回来。
+ *
+ * 只用 CSS 不可靠：全屏时插件的层级和选择器优先级都不由我们控制，实测锁屏后
+ * 底层控制栏还能点。行内 `display:none` 优先级最高，解锁时清空即可恢复。
+ */
+function setControlsHidden(hidden: boolean): void {
+  const root = player?.root as HTMLElement | undefined
+  const bar = root?.querySelector('.xgplayer-controls') as HTMLElement | null
+  if (bar) bar.style.display = hidden ? 'none' : ''
 }
 
 function pickGroup(i: number): void {
@@ -382,6 +393,22 @@ function watchControls(): void {
   classObserver.observe(root, { attributes: true, attributeFilter: ['class'] })
 }
 
+/**
+ * 打开插件自带的移动端手势。
+ *
+ * `MobilePlugin` 的默认配置里 `disablePress: true` —— 长按加速是关着的，
+ * 得显式打开并把倍速定在 2x（芒果/腾讯都是这个力度）。上下滑调亮度、
+ * 左右滑调进度、双击播放暂停默认就有，只是需要 mobile 预设被装上。
+ */
+function applyMobileGestures(): void {
+  const mobile = (player as unknown as { plugins?: Record<string, { config?: Record<string, unknown> }> })
+    ?.plugins?.mobile
+  if (!mobile?.config) return
+  mobile.config.disablePress = false
+  mobile.config.pressRate = 2
+  mobile.config.darkness = true
+}
+
 function mount(): void {
   destroyPlayer()
   fatal.value = ''
@@ -417,7 +444,12 @@ function mount(): void {
      */
     ignores: ['pip', 'download', 'screenShot', 'volume'],
     lang: 'zh-cn',
-    // HLS 由插件接管：它自己带一份 hls.js（light 版），不用我们再喂 video。
+    /*
+     * 手势力气全在 mobile 预设里（长按加速、左右滑调进度、上下滑调亮度/音量）。
+     * 预设按 UA 判定，WebView 里有可能被判成 pc —— 直接钉死成 mobile，反正
+     * 这个 App 只在手机上跑。
+     */
+    isMobileSimulateMode: 'mobile',
     plugins: [HlsJsPlugin],
     /*
      * 全屏按钮是 xgplayer 的，但目标必须是我们整个舞台：它默认只把自己的
@@ -428,6 +460,7 @@ function mount(): void {
 
   started = false
   watchControls()
+  applyMobileGestures()
   player.playbackRate = rate.value
   player.on('ready', () => {
     started = true
@@ -989,6 +1022,15 @@ function handlePickEpisode(row: { index: number }): void {
   padding: calc(4px + var(--safe-top)) calc(10px + var(--safe-right)) 22px calc(6px + var(--safe-left));
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent);
 }
+/*
+ * 全屏时系统栏已经藏起来了，`--safe-top` 还在（值是状态栏高度），
+ * 顶栏就离屏幕边缘老远。全屏统一收到 6px，视觉上和原生播放器一样贴着边。
+ */
+.tv-play__screen--full .tv-play__top,
+.tv-play__screen:fullscreen .tv-play__top {
+  padding-top: 6px;
+}
+
 /* 竖屏时视频已经在安全区下方，顶栏不用再叠一层安全区 */
 .tv-play__screen:not(.tv-play__screen--full) .tv-play__top {
   padding-top: 4px;
@@ -1237,7 +1279,8 @@ function handlePickEpisode(row: { index: number }): void {
   left: calc(44px + var(--safe-left));
   top: 50%;
   transform: translateY(-50%);
-  z-index: 32;
+  /* 高于插件控制栏（10）和连播卡片（24）：锁上之后它是画面上唯一能点的东西 */
+  z-index: 36;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1255,7 +1298,9 @@ function handlePickEpisode(row: { index: number }): void {
 }
 /* 锁定态用实一点的底色，一眼能找出「唯一的按钮」 */
 .tv-play__lock--on {
-  background: rgba(255, 255, 255, 0.22);
+  /* 锁上之后控制栏全没了，这颗按钮必须一眼能找到：加深底色 + 描边 */
+  background: rgba(0, 0, 0, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.42);
 }
 
 /*

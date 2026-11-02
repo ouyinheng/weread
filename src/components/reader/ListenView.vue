@@ -91,7 +91,7 @@ const emotionalVoices = computed(() => voices.value.filter(v => v.provider === '
 const onlineVoices = computed(() => voices.value.filter(v => !v.local && v.provider !== 'edge'))
 
 const selectedVoiceLabel = computed(() => {
-  if (!props.voice) return '默认 · 本机离线'
+  if (!props.voice) return '默认 · 自动'
   return voiceLabel(props.voice)
 })
 
@@ -386,14 +386,14 @@ function handleClose(): void {
         </template>
 
         <template v-if="sheet === 'voice'">
-          <p class="lv-sheet__hint">要「有人味」就选下面的<b>在线情感音色</b>：它们会按句子演语气，代价是要联网。<br>
-            默认的本地音色胜在不联网、句子之间无缝，但语气是平的——机器念字，不做表演。</p>
+          <p class="lv-sheet__hint">要「有人味」就选<b>在线情感音色</b>：它们会按句子演语气，代价是要联网。<br>
+            完全不联网只能退回<b>手机自带的语音引擎</b>——能听清，但语气是平的，机器念字，不做表演。</p>
           <div v-if="voicesLoading" class="lv-sheet__status">正在读取音色…</div>
           <p v-else-if="voicesError" class="lv-sheet__error">{{ voicesError }}</p>
           <div v-else class="lv-sheet__scroll">
             <button class="lv-voice" :class="{ 'lv-voice--on': !voice }" @click="handleVoiceDefault">
-              <span class="lv-voice__name">默认 · 本机离线</span>
-              <span class="lv-voice__meta">不联网、句子之间无缝 · 语气平实</span>
+              <span class="lv-voice__name">默认 · 自动选择</span>
+              <span class="lv-voice__meta">有网用在线音色，断网退回手机语音</span>
               <Icon v-if="!voice" name="check" :size="18" class="lv-voice__check" />
             </button>
 
@@ -413,7 +413,7 @@ function handleClose(): void {
             </template>
 
             <template v-if="offlineVoices.length">
-              <p class="lv-sheet__group">离线音色 · 不联网，语气平</p>
+              <p class="lv-sheet__group">离线音色 · 手机自带引擎，不联网</p>
               <button
                 v-for="v in offlineVoices"
                 :key="v.name"

@@ -89,8 +89,6 @@ public class MainActivity extends BridgeActivity {
         // packages, so nothing generates a capacitor.plugins.json entry for them.
         registerPlugin(TtsPlugin.class);
         registerPlugin(EdgeTtsPlugin.class);
-        // 离线神经语音（sherpa-onnx）：一条 AudioTrack 连续出声，没有句间空洞。
-        registerPlugin(SherpaTtsPlugin.class);
         // 听书常驻播放的前台服务 + 通知栏控制。
         registerPlugin(ListenPlugin.class);
         registerPlugin(CastPlugin.class);

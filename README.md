@@ -87,17 +87,6 @@ npm run preview
 注入同一个值，所以设置页「关于」里显示的版本和安装包信息永远一致。**发版只需要改
 `package.json` 一处。**
 
-先准备离线朗读的语音库和模型（只需一次）：AAR 50MB、中文模型 120MB，模型超过
-GitHub 的单文件上限，所以两者都不入库。
-
-```bash
-sh scripts/fetch-sherpa-model.sh
-```
-
-脚本可重复执行（已存在的文件按大小校验后跳过）。`.github/workflows/android.yml`
-在构建前会自动跑这一步并缓存，推 tag 就能直接出包。跳过这步会怎样：Gradle 找不到
-`sherpa-onnx` 的 AAR，编译直接失败。
-
 先准备发布签名（只需一次）：
 
 ```bash

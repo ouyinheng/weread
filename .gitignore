@@ -63,8 +63,5 @@ android/keystore.properties
 assets/screenshots/*
 !assets/screenshots/overview.png
 
-# 离线语音：模型 116MB，超过 GitHub 单文件上限，不入库。
-# 用 scripts/fetch-sherpa-model.sh 拉下来（AAR 同理，48MB 也不该进仓库）。
-android/app/src/main/assets/sherpa-onnx/
+# 本地 AAR 依赖不入库（历史上是离线语音的 sherpa-onnx，48MB）。
 android/app/libs/*.aar
-.cache-sherpa/

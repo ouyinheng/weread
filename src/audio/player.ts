@@ -369,11 +369,7 @@ export function useListenPlayer(deps: PlayerDeps) {
           // Failures name their own cause: the network voice and the bundled
           // model are not "the phone's engine is broken".
           const code = err instanceof Error ? err.message : ''
-          reason.value = code === 'edge-failed'
-            ? 'online-failed'
-            : code === 'sherpa-failed'
-              ? 'local-failed'
-              : 'engine-init-failed'
+          reason.value = code === 'edge-failed' ? 'online-failed' : 'engine-init-failed'
           status.value = 'unavailable'
           // Silence the chunk that was queued ahead, if any.
           void e.stop()

@@ -267,8 +267,7 @@ function handleRestartBook(book: Book): void {
           <Icon name="book" :size="46" :width="1.2" />
         </div>
         <p class="shelf__empty-title">书架空空如也</p>
-        <p class="shelf__empty-desc">点击「导入」选择手机里的 txt / epub</p>
-        <button class="shelf__empty-btn" @click="importFromDevice">导入书籍</button>
+        <p class="shelf__empty-desc">点右上角的「导入」选择手机里的 txt / epub</p>
       </div>
 
       <div v-else class="shelf__grid">
@@ -292,9 +291,9 @@ function handleRestartBook(book: Book): void {
         </div>
 
         <!-- WeRead closes the grid with an "add" cell. -->
-        <button class="shelf__add" @click="importFromDevice" aria-label="导入书籍">
+        <!-- <button class="shelf__add" @click="importFromDevice" aria-label="导入书籍">
           <span class="shelf__add-glyph">+</span>
-        </button>
+        </button> -->
       </div>
 
       <div v-if="store.books.length" class="shelf__foot">{{ store.books.length }} 本</div>
@@ -656,23 +655,6 @@ function handleRestartBook(book: Book): void {
 
 .shelf__empty-desc {
   font-size: calc(13px * var(--app-font-scale));
-}
-
-.shelf__empty-btn {
-  margin-top: 14px;
-  height: 38px;
-  padding: 0 26px;
-  border-radius: 19px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: calc(15px * var(--app-font-scale));
-  font-weight: 500;
-  transition: background-color 120ms;
-}
-
-.shelf__empty-btn:active {
-  background: var(--accent-press);
-  opacity: 1;
 }
 
 /* ---------- bottom sheet ---------- */

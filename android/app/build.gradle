@@ -17,6 +17,22 @@ def appVersionName = "${vMajor}.${vMinor}.${vPatch}"
 def appVersionCode = vMajor * 10000 + vMinor * 100 + vPatch
 
 /*
+ * 产物文件名带上版本号：`weread-v1.2.0-debug.apk`，而不是 `app-debug.apk`。
+ *
+ * 版本号仍然是 package.json 那一个来源（versionName 由上面算出来），所以文件名
+ * 和「关于」里显示的版本永远对得上。debug 带 -debug 后缀，一眼能看出是不是
+ * 调试签名；两个变体输出在各自目录里，不会互相覆盖。
+ */
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        def suffix = variant.buildType == 'release' ? '' : "-${variant.buildType}"
+        variant.outputs.each { output ->
+            output.outputFileName.set("weread-v${appVersionName}${suffix}.apk")
+        }
+    }
+}
+
+/*
  * 发布签名。口令放在 android/keystore.properties（不入库）。
  *
  * 没有这个文件时 release 变体不配置签名，assembleRelease 出来的包装不上 ——

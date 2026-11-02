@@ -1,7 +1,11 @@
 package com.weread.app;
 
 import android.media.AudioAttributes;
-import android.media.MediaPlayer;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
+import android.media.MediaCodec;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -18,6 +22,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
@@ -25,10 +30,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -51,16 +59,28 @@ import okio.ByteString;
  * One WebSocket per utterance, and **two utterances are in flight**: while the
  * current one is playing, the next is already being synthesised into its own
  * file. The page speaks a few sentences per utterance (see `chunker.ts`) and
- * asks one ahead, so the next file is ready when the current one ends and
- * playback starts immediately instead of waiting for a fresh network round
- * trip.
+ * asks one ahead, so the next file is ready when the current one ends.
  *
  * `prefetch` goes one step further: the page asks for a whole chapter up front,
  * the plugin synthesises it with {@link #PREFETCH_CONCURRENCY} sockets and keeps
  * the mp3s in `cacheDir/edge-tts`. `speak` then finds the file already on disk,
  * so listening to a prepared chapter is pure local playback — no network in the
- * loop at all, and no gap between paragraphs. Files are keyed by
- * text+voice+pitch+rate, so changing any of those is a cache miss by design.
+ * loop at all. Files are keyed by text+voice+pitch+rate, so changing any of
+ * those is a cache miss by design.
+ *
+ * **Playback is one continuous stream, not a playlist of mp3s.** A per-utterance
+ * `MediaPlayer` has to be released, recreated and prepared at every boundary,
+ * which is 100–200 ms of audible silence every twenty seconds — the exact
+ * "段与段之间顿一下" complaint. So the mp3s are decoded (MediaExtractor +
+ * MediaCodec) and written into a single `AudioTrack` opened in `MODE_STREAM`,
+ * exactly like {@link SherpaTtsPlugin} does with its model: two threads, a
+ * bounded PCM queue between them, and the track's own buffer as the jitter
+ * buffer. The consumer never stops at a boundary, so the boundary is not in the
+ * audio at all.
+ *
+ * Because the writer runs ahead of the ear, `onStart` / `onDone` are scheduled
+ * on the track's playback head (`getPlaybackHeadPosition`), not on when bytes
+ * were written: the highlight has to follow what is *audible*.
  *
  * Failure is deliberately noisy: if the network is down the JS layer switches
  * to the system voice or shows an error, rather than pretending to play.
@@ -94,6 +114,11 @@ public class EdgeTtsPlugin extends Plugin {
     private static final int MAX_CACHE_FILES = 150;
     private static final String CACHE_DIR = "edge-tts";
 
+    /** What the endpoint returns; every file decodes to this rate and channel count. */
+    private static final int SAMPLE_RATE = 24000;
+    /** Bytes per `AudioTrack.write`. Small enough that stop() is felt quickly. */
+    private static final int WRITE_BLOCK = 4800;
+
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(12, TimeUnit.SECONDS)
             // WebSocket frames arrive whenever the server finishes a chunk; a
@@ -119,6 +144,8 @@ public class EdgeTtsPlugin extends Plugin {
         volatile int attempt;
         boolean started;
         boolean ready;
+        /** Set once this job has reported done or failed; nothing may act on it again. */
+        volatile boolean settled;
         Runnable timeout;
 
         Job(String id, String text, String voice, String pitch, double rate, int session) {
@@ -131,10 +158,25 @@ public class EdgeTtsPlugin extends Plugin {
         }
     }
 
-    /** Queued sentences, head first. Mutated on the main thread only. */
+    /** Queued sentences with no audio yet, head first. Mutated on the main thread only. */
     private final List<Job> queue = new ArrayList<>();
-    private MediaPlayer player;
-    private Job playing;
+    /** Audio already on disk, waiting to be decoded. Drained by the decoder thread. */
+    private final LinkedBlockingQueue<Job> playQueue = new LinkedBlockingQueue<>();
+    /**
+     * Decoded PCM waiting for the track. Two is the whole jitter budget: about
+     * 1 MB each, and the writer is never more than one chunk from starving.
+     */
+    private final ArrayBlockingQueue<Decoded> pcm = new ArrayBlockingQueue<>(2);
+    /** Jobs inside the track right now, in play order, with their frame ranges. */
+    private final List<Span> spans = new ArrayList<>();
+    private AudioTrack track;
+    private int trackRate = SAMPLE_RATE;
+    private int trackChannels = 1;
+    private Thread decodeThread;
+    private Thread writeThread;
+    private volatile boolean running;
+    /** Frames handed to the track since the last flush: the clock events ride on. */
+    private volatile long clockFrames;
     /** Bumped on stop so late socket callbacks can tell they are stale. */
     private volatile int session;
 
@@ -142,6 +184,55 @@ public class EdgeTtsPlugin extends Plugin {
     private int prefetchGen;
     /** Sockets of the running prefetch, so a cancel can close them immediately. */
     private final List<WebSocket> prefetchSockets = new ArrayList<>();
+
+    /** One utterance decoded to raw 16-bit PCM, ready for the track. */
+    private static final class Decoded {
+        final Job job;
+        final byte[] pcm;
+        final int frames;
+        final int rate;
+        final int channels;
+
+        Decoded(Job job, byte[] pcm, int frames, int rate, int channels) {
+            this.job = job;
+            this.pcm = pcm;
+            this.frames = frames;
+            this.rate = rate;
+            this.channels = channels;
+        }
+    }
+
+    /**
+     * One job's frame range inside the track.
+     *
+     * The writer is seconds ahead of the ear, so "started" cannot mean "written
+     * to the track". Each span is instead compared against the playback head —
+     * that is what makes the follow-along highlight line up with the voice.
+     */
+    private static final class Span {
+        final Job job;
+        final long start;
+        final int frames;
+        final int rate;
+        boolean started;
+        boolean heard;
+
+        Span(Job job, long start, int frames, int rate) {
+            this.job = job;
+            this.start = start;
+            this.frames = frames;
+            this.rate = rate;
+        }
+
+        int durationMs() {
+            return (int) (frames * 1000L / Math.max(1, rate));
+        }
+    }
+
+    @Override
+    public void load() {
+        startThreads();
+    }
 
     /** Always available; network health is judged when a sentence is spoken. */
     @PluginMethod
@@ -513,16 +604,25 @@ public class EdgeTtsPlugin extends Plugin {
 
     private void stopInternal() {
         session++;
-        List<Job> jobs = new ArrayList<>(queue);
+        List<Job> pending = new ArrayList<>(queue);
         queue.clear();
-        playing = null;
-        for (Job job : jobs) cancelJob(job);
-        releasePlayer();
+        // Dropping these is enough: both workers check `session` before acting,
+        // and a flushed track cannot be heard even if one write is in flight.
+        playQueue.clear();
+        pcm.clear();
+        for (Job job : pending) {
+            job.settled = true;
+            cancelJob(job);
+        }
+        pauseTrack();
     }
 
     /**
-     * Keep the head playing and the next sentence synthesising. Called on the
-     * main thread after every queue/playback transition.
+     * Keep the next two sentences coming and hand finished audio to the decoder.
+     *
+     * Called on the main thread after every queue transition. Playback itself is
+     * not driven from here any more — the write thread owns the track and never
+     * stops between jobs, which is the whole point of this design.
      */
     private void pump() {
         if (queue.isEmpty()) return;
@@ -535,7 +635,14 @@ public class EdgeTtsPlugin extends Plugin {
             if (!next.started) startSynthesis(next);
         }
 
-        if (playing == null && head.ready) playHead(head);
+        // Move every ready job, in order, to the decoder. Order is preserved by
+        // only ever draining the head of `queue`.
+        while (!queue.isEmpty()) {
+            Job job = queue.get(0);
+            if (!job.ready || job.session != session) break;
+            queue.remove(0);
+            playQueue.add(job);
+        }
     }
 
     private void startSynthesis(Job job) {
@@ -588,9 +695,13 @@ public class EdgeTtsPlugin extends Plugin {
         return UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT);
     }
 
-    /** Main-thread check: this job belongs to the current run and is still queued. */
+    /**
+     * Main-thread check: this job belongs to the current run and has not been
+     * reported yet. Membership of `queue` is no longer the test — a job moves to
+     * `playQueue` once its audio is on disk, and it is still perfectly current.
+     */
     private boolean isCurrent(Job job) {
-        return job.session == session && queue.contains(job);
+        return job.session == session && !job.settled;
     }
 
     /** Off-main-thread check: the run and the connection attempt are both current. */
@@ -617,25 +728,15 @@ public class EdgeTtsPlugin extends Plugin {
         if (timeout != null) handler.removeCallbacks(timeout);
     }
 
-    private void releasePlayer() {
-        MediaPlayer mp = player;
-        player = null;
-        if (mp != null) {
-            try {
-                mp.stop();
-            } catch (Exception ignored) {
-                // Already completed or released.
-            }
-            mp.release();
-        }
-    }
-
     private void fail(Job job, String reason) {
         if (!isCurrent(job)) return;
+        job.settled = true;
         queue.remove(job);
-        if (playing == job) {
-            playing = null;
-            releasePlayer();
+        playQueue.remove(job);
+        synchronized (spans) {
+            for (Iterator<Span> it = spans.iterator(); it.hasNext(); ) {
+                if (it.next().job == job) it.remove();
+            }
         }
         cancelJob(job);
         notifyError(job.id, reason);
@@ -675,65 +776,361 @@ public class EdgeTtsPlugin extends Plugin {
         }
     }
 
-    private void playHead(Job job) {
-        if (playing != null || !isCurrent(job) || !job.ready || job.file == null) return;
-        playing = job;
+    /* ---------- 播放：一条常开的 AudioTrack ---------- */
 
-        try {
-            MediaPlayer mp = new MediaPlayer();
-            mp.setAudioAttributes(new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build());
-            mp.setDataSource(job.file.getAbsolutePath());
-            mp.setOnPreparedListener(p -> {
-                if (playing != job || !isCurrent(job)) {
-                    if (player == p) player = null;
-                    p.release();
+    /**
+     * Two workers around a bounded PCM queue: decode → queue → track.
+     *
+     * The track is never closed between sentences, so a sentence boundary is
+     * just more samples in the same stream. `AudioTrack.write` in BLOCKING mode
+     * is also the natural pace keeper — when the buffer is full the writer
+     * blocks, which throttles the decoder for free (same trick as
+     * {@link SherpaTtsPlugin}).
+     */
+    private void startThreads() {
+        if (running) return;
+        running = true;
+
+        decodeThread = new Thread(() -> {
+            while (running) {
+                Job job;
+                try {
+                    job = playQueue.poll(300, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
                     return;
                 }
-                notifyStart(job.id, p.getDuration());
-                p.start();
-            });
-            mp.setOnCompletionListener(p -> handler.post(() -> finish(job, p)));
-            mp.setOnErrorListener((p, what, extra) -> {
-                fail(job, "playback");
-                return true;
-            });
-            player = mp;
-            mp.prepareAsync();
-        } catch (Exception e) {
-            playing = null;
-            fail(job, "playback");
+                if (job == null) continue;
+                if (job.session != session || job.file == null) continue;
+
+                Decoded decoded = null;
+                try {
+                    decoded = decodeMp3(job);
+                } catch (Throwable first) {
+                    // One retry on a fresh MediaCodec: a decoder hiccup is
+                    // usually transient, and giving up here kills playback.
+                    try {
+                        decoded = decodeMp3(job);
+                    } catch (Throwable second) {
+                        handler.post(() -> fail(job, "decode"));
+                    }
+                }
+                if (decoded == null) continue;
+
+                try {
+                    /*
+                     * Never more than two chunks decoded ahead (~25 s of audio,
+                     * ~2 MB). Decoding a whole chapter into RAM would waste
+                     * memory to buy nothing: the mp3s are already on disk.
+                     */
+                    while (running && !pcm.offer(decoded, 300, TimeUnit.MILLISECONDS)) {
+                        if (job.session != session) break;
+                    }
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }, "edge-decode");
+
+        writeThread = new Thread(() -> {
+            while (running) {
+                Decoded d;
+                try {
+                    d = pcm.poll(300, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (d == null || d.job.session != session) continue;
+
+                AudioTrack t = ensureTrack(d.rate, d.channels);
+                if (t == null) {
+                    handler.post(() -> fail(d.job, "audio-track"));
+                    continue;
+                }
+                // Registered before the write: the span is measured in the same
+                // frames the playback head counts, so it becomes audible first.
+                synchronized (spans) {
+                    spans.add(new Span(d.job, clockFrames, d.frames, d.rate));
+                }
+
+                int offset = 0;
+                try {
+                    while (offset < d.pcm.length && d.job.session == session) {
+                        int n = t.write(d.pcm, offset,
+                                Math.min(WRITE_BLOCK, d.pcm.length - offset),
+                                AudioTrack.WRITE_BLOCKING);
+                        if (n <= 0) break;
+                        offset += n;
+                    }
+                } catch (Throwable ignored) {
+                    // stop() flushed the track underneath us; nothing to write.
+                }
+                clockFrames += d.frames;
+            }
+        }, "edge-play");
+
+        decodeThread.start();
+        writeThread.start();
+        handler.postDelayed(tick, 80);
+    }
+
+    /**
+     * Report `onStart` / `onDone` at the moment the listener hears them.
+     *
+     * The writer runs up to a chunk ahead of the ear, so emitting on write would
+     * drag the follow-along highlight ahead of the voice by seconds.
+     * `getPlaybackHeadPosition` is the only clock that matches the speaker.
+     */
+    private final Runnable tick = new Runnable() {
+        @Override
+        public void run() {
+            AudioTrack t = track;
+            if (t != null) {
+                long head = t.getPlaybackHeadPosition();
+                List<Span> starting = null;
+                List<Span> ending = null;
+                synchronized (spans) {
+                    for (Iterator<Span> it = spans.iterator(); it.hasNext(); ) {
+                        Span s = it.next();
+                        if (!s.started && head >= s.start) {
+                            s.started = true;
+                            if (starting == null) starting = new ArrayList<>();
+                            starting.add(s);
+                        }
+                        if (s.started && head >= s.start + s.frames) {
+                            s.heard = true;
+                            it.remove();
+                            if (ending == null) ending = new ArrayList<>();
+                            ending.add(s);
+                        }
+                    }
+                }
+                // Emitted outside the lock: listeners must not run under it.
+                if (starting != null) {
+                    for (Span s : starting) notifyStart(s.job.id, s.durationMs());
+                }
+                if (ending != null) {
+                    for (Span s : ending) done(s.job);
+                }
+            }
+            if (running) handler.postDelayed(this, 80);
+        }
+    };
+
+    /** The ear reached the end of this chunk: tell the page, then let it move on. */
+    private void done(Job job) {
+        if (job.settled) return;
+        job.settled = true;
+        job.ready = false;
+        // The cached mp3 stays on disk; only this handle goes away.
+        job.file = null;
+        notifyDone(job.id);
+        pump();
+    }
+
+    private AudioTrack ensureTrack(int rate, int channels) {
+        AudioTrack t = track;
+        if (t != null
+                && t.getState() == AudioTrack.STATE_INITIALIZED
+                && trackRate == rate
+                && trackChannels == channels) {
+            if (t.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+                try {
+                    t.play();
+                } catch (Throwable ignored) {
+                    // Released between the check and here.
+                }
+            }
+            return t;
+        }
+
+        releaseTrack();
+        int channelMask = channels >= 2
+                ? AudioFormat.CHANNEL_OUT_STEREO
+                : AudioFormat.CHANNEL_OUT_MONO;
+        int min = AudioTrack.getMinBufferSize(rate, channelMask, AudioFormat.ENCODING_PCM_16BIT);
+        /*
+         * 1.5 s of runway: long enough that a decode hiccup or a cache miss
+         * never reaches the ear, short enough that pause still feels instant.
+         */
+        int size = Math.max(Math.max(min * 2, 1), rate * channels * 2 * 3 / 2);
+        try {
+            AudioTrack built = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build())
+                    .setAudioFormat(new AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(rate)
+                            .setChannelMask(channelMask)
+                            .build())
+                    .setBufferSizeInBytes(size)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build();
+            built.play();
+            track = built;
+            trackRate = rate;
+            trackChannels = channels;
+            return built;
+        } catch (Throwable e) {
+            track = null;
+            return null;
         }
     }
 
-    private void finish(Job job, MediaPlayer mp) {
-        if (playing != job) {
-            if (player == mp) player = null;
-            try {
-                mp.release();
-            } catch (Exception ignored) {
-                // Already released.
-            }
-            return;
-        }
-        playing = null;
-        if (player == mp) player = null;
+    /** Silence now, but keep the track: resuming does not pay for a rebuild. */
+    private void pauseTrack() {
+        AudioTrack t = track;
+        if (t == null) return;
         try {
-            mp.release();
-        } catch (Exception ignored) {
+            t.pause();
+            t.flush();
+        } catch (Throwable ignored) {
+            // Already stopped.
+        }
+        // flush() puts the playback head back to 0; the event clock follows it.
+        clockFrames = 0;
+        synchronized (spans) {
+            spans.clear();
+        }
+    }
+
+    private void releaseTrack() {
+        AudioTrack t = track;
+        track = null;
+        clockFrames = 0;
+        synchronized (spans) {
+            spans.clear();
+        }
+        if (t == null) return;
+        try {
+            t.pause();
+        } catch (Throwable ignored) {
+            // Already stopped.
+        }
+        try {
+            t.flush();
+        } catch (Throwable ignored) {
+            // Already flushed.
+        }
+        try {
+            t.release();
+        } catch (Throwable ignored) {
             // Already released.
         }
-        queue.remove(job);
-        job.ready = false;
-        if (job.file != null) {
-            // Synthesised audio lands in the chapter cache and stays there.
-            if (!job.keepFile) job.file.delete();
-            job.file = null;
+    }
+
+    /**
+     * Decode one cached mp3 into raw PCM.
+     *
+     * Whole-file on purpose: the mp3 is already on disk, one chunk is ~19 s, and
+     * knowing the full frame count up front is what lets `onStart` report an
+     * exact duration for the follow-along highlight.
+     */
+    private Decoded decodeMp3(Job job) throws Exception {
+        MediaExtractor extractor = new MediaExtractor();
+        MediaCodec codec = null;
+        try {
+            extractor.setDataSource(job.file.getAbsolutePath());
+            int trackIndex = -1;
+            MediaFormat format = null;
+            for (int i = 0; i < extractor.getTrackCount(); i++) {
+                MediaFormat f = extractor.getTrackFormat(i);
+                String mime = f.getString(MediaFormat.KEY_MIME);
+                if (mime != null && mime.startsWith("audio/")) {
+                    trackIndex = i;
+                    format = f;
+                    break;
+                }
+            }
+            if (format == null) throw new IllegalStateException("no-audio-track");
+            extractor.selectTrack(trackIndex);
+
+            int rate = format.containsKey(MediaFormat.KEY_SAMPLE_RATE)
+                    ? format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    : SAMPLE_RATE;
+            int channels = format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)
+                    ? format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    : 1;
+            String mime = format.getString(MediaFormat.KEY_MIME);
+
+            codec = MediaCodec.createDecoderByType(mime);
+            codec.configure(format, null, null, 0);
+            codec.start();
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream(1 << 18);
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            boolean inputDone = false;
+            boolean outputDone = false;
+            long deadline = System.currentTimeMillis() + 20000L;
+
+            while (!outputDone) {
+                if (System.currentTimeMillis() > deadline) {
+                    throw new IllegalStateException("decode-timeout");
+                }
+                if (!inputDone) {
+                    int in = codec.dequeueInputBuffer(10000);
+                    if (in >= 0) {
+                        ByteBuffer src = codec.getInputBuffer(in);
+                        int size = src == null ? -1 : extractor.readSampleData(src, 0);
+                        if (size < 0) {
+                            codec.queueInputBuffer(in, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                            inputDone = true;
+                        } else {
+                            codec.queueInputBuffer(in, 0, size, extractor.getSampleTime(), 0);
+                            extractor.advance();
+                        }
+                    }
+                }
+                int index = codec.dequeueOutputBuffer(info, 10000);
+                if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    // The decoder's real output format wins over the container's.
+                    MediaFormat changed = codec.getOutputFormat();
+                    if (changed.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                        rate = changed.getInteger(MediaFormat.KEY_SAMPLE_RATE);
+                    }
+                    if (changed.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                        channels = changed.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
+                    }
+                } else if (index >= 0) {
+                    ByteBuffer dst = codec.getOutputBuffer(index);
+                    if (dst != null && info.size > 0) {
+                        byte[] block = new byte[info.size];
+                        dst.position(info.offset);
+                        dst.limit(info.offset + info.size);
+                        dst.get(block);
+                        out.write(block, 0, block.length);
+                    }
+                    codec.releaseOutputBuffer(index, false);
+                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        outputDone = true;
+                    }
+                }
+            }
+
+            byte[] bytes = out.toByteArray();
+            int frames = bytes.length / Math.max(1, channels * 2);
+            if (frames == 0) throw new IllegalStateException("no-pcm");
+            return new Decoded(job, bytes, frames, rate, channels);
+        } finally {
+            if (codec != null) {
+                try {
+                    codec.stop();
+                } catch (Throwable ignored) {
+                    // Never started.
+                }
+                try {
+                    codec.release();
+                } catch (Throwable ignored) {
+                    // Already released.
+                }
+            }
+            try {
+                extractor.release();
+            } catch (Throwable ignored) {
+                // Already released.
+            }
         }
-        notifyDone(job.id);
-        pump();
     }
 
     private void appendAudio(Job job, byte[] data, int attempt) {
@@ -845,6 +1242,9 @@ public class EdgeTtsPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        running = false;
+        if (decodeThread != null) decodeThread.interrupt();
+        if (writeThread != null) writeThread.interrupt();
         handler.post(() -> {
             prefetchGen++;
             for (WebSocket ws : prefetchSockets) {
@@ -857,6 +1257,7 @@ public class EdgeTtsPlugin extends Plugin {
             prefetchSockets.clear();
         });
         handler.post(this::stopInternal);
+        handler.post(this::releaseTrack);
         super.handleOnDestroy();
     }
 

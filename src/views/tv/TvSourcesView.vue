@@ -35,6 +35,14 @@ const notice = ref('')
 const filter = ref('')
 const testing = ref('')
 
+/**
+ * 只展示标注了清晰度的源。
+ *
+ * 采集站的搜索接口不返回画质，源列表里没标 quality 的（多半是没实测过的），
+ * 留着也无法比较「哪个更清晰」，默认干脆不展示；想看全部点顶部那颗开关。
+ */
+const onlyKnownQuality = ref(true)
+
 /** 本次会话的测活结果。源本身没有健康字段，测出来只活在这个页面里。 */
 const health = ref<Record<string, boolean>>({})
 const checking = ref(false)
@@ -46,12 +54,72 @@ onMounted(() => {
 
 const filtered = computed(() => {
   const q = filter.value.trim().toLowerCase()
-  const list = store.sources
+  let list = store.sources
+  if (onlyKnownQuality.value) list = list.filter(s => s.quality)
   if (!q) return list
   return list.filter(s => s.name.toLowerCase().includes(q) || s.api.toLowerCase().includes(q))
 })
 
 const dead = computed(() => store.sources.filter(s => health.value[s.id] === false))
+
+/** 被「仅看有清晰度」挡在列表外的数量：空列表时要能说清「不是没源，是被藏了」。 */
+const hiddenByQuality = computed(() => (onlyKnownQuality.value ? store.sources.filter(s => !s.quality).length : 0))
+
+/**
+ * 高度 → 档位标签。
+ *
+ * 容差 15%：采集站普遍对片源做过裁切（1920×1080 → 1920×1040），严格按 ≥ 档位
+ * 判定会把 1040 打成 720P，与观感相反。和书源那边的小圆点一样，这里是纯展示逻辑。
+ */
+const QUALITY_TIERS: Array<[number, string]> = [
+  [2160, '4K'],
+  [1440, '2K'],
+  [1080, '1080P'],
+  [720, '720P'],
+  [540, '540P'],
+  [480, '480P'],
+  [360, '360P'],
+]
+
+function qualityLabel(height?: number): string {
+  if (!height || height <= 0) return ''
+  let best: [number, string] | undefined
+  for (const tier of QUALITY_TIERS) {
+    const [value] = tier
+    if (Math.abs(value - height) > value * 0.15) continue
+    if (!best || Math.abs(value - height) < Math.abs(best[0] - height)) best = tier
+  }
+  return best ? best[1] : `${height}P`
+}
+
+/** 档位越高标越亮：4K 金 / 2K 紫 / 1080P 主色，其余灰。 */
+function qualityTone(label: string): string {
+  if (label === '4K') return 'q-4k'
+  if (label === '2K') return 'q-2k'
+  if (label === '1080P') return 'q-1080'
+  return 'q-low'
+}
+
+/** 已启用源的序号（1 起），用于让用户知道当前优先级；停用源返回空。 */
+function orderOf(s: TvSource): string {
+  if (!s.enabled) return ''
+  const list = store.sources.filter(x => x.enabled)
+  const index = list.findIndex(x => x.id === s.id)
+  return index >= 0 ? String(index + 1) : ''
+}
+
+/** 上/下是否还能移动：相邻方向上还有别的启用源才可动。 */
+function canMove(s: TvSource, offset: -1 | 1): boolean {
+  if (!s.enabled) return false
+  const enabled = store.sources.filter(x => x.enabled)
+  const index = enabled.findIndex(x => x.id === s.id)
+  if (index < 0) return false
+  return offset === -1 ? index > 0 : index < enabled.length - 1
+}
+
+function move(s: TvSource, offset: -1 | 1): void {
+  store.moveSource(s.id, offset)
+}
 
 function flash(message: string): void {
   notice.value = message
@@ -291,6 +359,19 @@ function handleUsePasteTab(): void {
         <button class="src-action" :disabled="checking || !dead.length" @click="purgeDead">
           清除失效<template v-if="dead.length">（{{ dead.length }}）</template>
         </button>
+        <button
+          class="src-action src-action--filter"
+          :class="{ 'src-action--on': onlyKnownQuality }"
+          :aria-pressed="onlyKnownQuality"
+          :title="
+            onlyKnownQuality
+              ? '当前只显示标注了清晰度的源，点击可显示全部'
+              : '当前显示全部源，点击可只保留标注了清晰度的源'
+          "
+          @click="onlyKnownQuality = !onlyKnownQuality"
+        >
+          {{ onlyKnownQuality ? '仅看有清晰度' : '全部清晰度' }}
+        </button>
       </div>
 
       <div v-if="store.sources.length" class="src-listbar">
@@ -303,11 +384,42 @@ function handleUsePasteTab(): void {
           <button class="src-item__main" @click="test(s)">
             <span class="src-dot" :style="{ background: dotColor(s) }" />
             <span class="src-item__text">
-              <span class="src-name">{{ s.name }}</span>
+              <span class="src-name">
+                <!-- 清晰度放最前：这一行最该一眼看到的是「清不清」，不是源名 -->
+                <span
+                  v-if="qualityLabel(s.quality)"
+                  class="tv-q"
+                  :class="qualityTone(qualityLabel(s.quality))"
+                  :title="`该源的最高清晰度：${s.quality}P`"
+                >
+                  {{ qualityLabel(s.quality) }}
+                </span>
+                <span class="tv-q__name">{{ s.name }}</span>
+              </span>
               <span class="src-meta">{{ s.api }}</span>
               <span class="src-meta">{{ healthLabel(s) }}</span>
             </span>
           </button>
+          <!-- 排序只对启用中的源开放：停用源不参与搜索，挪它没有意义 -->
+          <div v-if="s.enabled" class="tv-order" :title="`当前优先级第 ${orderOf(s)} 位`">
+            <span class="tv-order__no">{{ orderOf(s) }}</span>
+            <button
+              class="tv-order__btn"
+              :disabled="!canMove(s, -1)"
+              :aria-label="`上移 ${s.name}`"
+              @click.stop="move(s, -1)"
+            >
+              ↑
+            </button>
+            <button
+              class="tv-order__btn"
+              :disabled="!canMove(s, 1)"
+              :aria-label="`下移 ${s.name}`"
+              @click.stop="move(s, 1)"
+            >
+              ↓
+            </button>
+          </div>
           <button
             class="toggle src-toggle"
             :class="{ on: s.enabled }"
@@ -326,7 +438,11 @@ function handleUsePasteTab(): void {
 
       <div v-if="!filtered.length" class="src-empty">
         {{
-          filter ? '没有匹配的视频源。' : '还没有视频源。点右上角「导入」，粘贴 JSON、填源列表链接或选文件。'
+          filter
+            ? '没有匹配的视频源。'
+            : hiddenByQuality
+              ? `当前只显示标注了清晰度的源，另有 ${hiddenByQuality} 个未标注的被隐藏。点上方「全部清晰度」可以看全部。`
+              : '还没有视频源。点右上角「导入」，粘贴 JSON、填源列表链接或选文件。'
         }}
       </div>
     </main>
@@ -427,5 +543,95 @@ function handleUsePasteTab(): void {
   background: var(--bg-panel);
   color: var(--text);
   font-size: calc(13px * var(--app-font-scale));
+}
+
+/* 筛选生效时按钮自身要能看出「开着」，否则用户不知道列表为什么变短了。 */
+.src-action--on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 前两个按钮按两列排，筛选开关单独占一行并压矮：它是筛选条，不是同级的动作。 */
+.src-action--filter {
+  flex: 1 1 100%;
+  height: 38px;
+}
+
+/* 清晰度徽章：档位越高越亮，一眼扫过去 4K/2K 会被最先注意到。 */
+.tv-q {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 30px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: calc(10px * var(--app-font-scale));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-q.q-4k {
+  color: #e8a33d;
+  background: rgba(232, 163, 61, 0.16);
+}
+
+.tv-q.q-2k {
+  color: #a66bff;
+  background: rgba(166, 107, 255, 0.16);
+}
+
+.tv-q.q-1080 {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tv-q.q-low {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+/* 源名可能很长，徽章不被挤压的前提下让名字自己截断。 */
+.tv-q__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 排序控件：序号 + 上下箭头，只对启用中的源显示。 */
+.tv-order {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.tv-order__no {
+  min-width: 13px;
+  text-align: center;
+  font-size: calc(10px * var(--app-font-scale));
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-order__btn {
+  width: 22px;
+  height: 26px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: calc(12px * var(--app-font-scale));
+  line-height: 1;
+}
+
+.tv-order__btn:not(:disabled):active {
+  background: var(--bg-secondary);
+  color: var(--text);
+}
+
+.tv-order__btn:disabled {
+  opacity: 0.22;
 }
 </style>

@@ -93,7 +93,7 @@ export const useTvStore = defineStore('tv', () => {
   }
 
   /** 导入源列表；返回真正新增的条数（按接口地址去重）。 */
-  function importSources(list: Array<{ name?: string; api: string }>): number {
+  function importSources(list: Array<{ name?: string; api: string; quality?: number }>): number {
     const seen = new Set(sources.value.map(s => s.api))
     let added = 0
     for (const item of list) {
@@ -106,11 +106,38 @@ export const useTvStore = defineStore('tv', () => {
         api,
         enabled: true,
         addedAt: Date.now(),
+        quality: item.quality,
       })
       added++
     }
     if (added) persist()
     return added
+  }
+
+  /**
+   * 调整源的先后顺序（offset −1 上移 / 1 下移）。
+   *
+   * 只在「启用中的源」之间交换：停用的源不参与影视搜索，把它的位置换走没有意义，
+   * 而且会让用户点一次上移却看到源没动（其实是被一个停用源占了位置）。
+   */
+  function moveSource(id: string, offset: -1 | 1): void {
+    const list = sources.value
+    const index = list.findIndex(s => s.id === id)
+    if (index < 0) return
+    let target = -1
+    for (let i = index + offset; i >= 0 && i < list.length; i += offset) {
+      if (list[i].enabled) {
+        target = i
+        break
+      }
+    }
+    if (target < 0) return
+    const next = [...list]
+    const tmp = next[index]
+    next[index] = next[target]
+    next[target] = tmp
+    sources.value = next
+    persist()
   }
 
   function recordHistory(entry: TvHistoryEntry): void {
@@ -145,6 +172,7 @@ export const useTvStore = defineStore('tv', () => {
     removeSource,
     toggleSource,
     importSources,
+    moveSource,
     recordHistory,
     historyOf,
     removeHistory,

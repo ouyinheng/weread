@@ -10,6 +10,8 @@
 export interface ImportedSource {
   name?: string
   api: string
+  /** 源列表里标注的清晰度（高度像素）；缺省表示未标注 */
+  quality?: number
 }
 
 /** 跳过原因：给用户一句能看懂的解释，不写技术黑话。 */
@@ -33,6 +35,42 @@ const XML_PATTERN = /\/at\/xml(?:[/?#]|$)/i
 const SITE_TYPE_XML = 0
 const SITE_TYPE_JSON = 1
 
+/** 源列表里常见的清晰度写法 → 视频高度（像素） */
+const QUALITY_ALIASES: Record<string, number> = {
+  '8k': 4320,
+  '4k': 2160,
+  '2k': 1440,
+  '1080p': 1080,
+  '720p': 720,
+  '540p': 540,
+  '480p': 480,
+  '360p': 360,
+}
+
+/**
+ * 归一化清晰度标注：`2160`、`"2160"`、`"4K"`、`"1080P"` 都收。
+ *
+ * 只认 120–4320 的高度值：低于 120 的多半是误填的宽高比，高于 8K 的明显是脏数据，
+ * 一律当「未标注」处理（而不是显示一个错得离谱的档位）。
+ */
+export function normalizeQuality(raw: unknown): number | undefined {
+  let value: number | undefined
+  if (typeof raw === 'number') {
+    value = raw
+  } else if (typeof raw === 'string') {
+    const text = raw.trim().toLowerCase()
+    if (!text) return undefined
+    const alias = QUALITY_ALIASES[text]
+    if (alias) return alias
+    const matched = text.match(/^(\d{3,4})\s*p?$/)
+    if (!matched) return undefined
+    value = Number(matched[1])
+  }
+  if (value === undefined || !Number.isFinite(value)) return undefined
+  const height = Math.round(value)
+  return height >= 120 && height <= 4320 ? height : undefined
+}
+
 function emptySkips(): Record<SkipReason, number> {
   return { spider: 0, xml: 0, disabled: 0, unsearchable: 0, invalid: 0 }
 }
@@ -43,6 +81,7 @@ interface Candidate {
   type?: unknown
   searchable?: unknown
   disabled?: unknown
+  quality?: unknown
 }
 
 /**
@@ -64,7 +103,7 @@ function classify(row: Candidate): { ok: ImportedSource } | { skip: SkipReason }
   if (row.searchable === 0 || row.searchable === '0') return { skip: 'unsearchable' }
 
   const name = typeof row.name === 'string' ? row.name.trim() : ''
-  return { ok: { name: name || undefined, api } }
+  return { ok: { name: name || undefined, api, quality: normalizeQuality(row.quality) } }
 }
 
 /**
@@ -88,6 +127,7 @@ export function parseSubscription(text: string): ImportResult {
         type: r.type,
         searchable: r.searchable,
         disabled: r.disabled,
+        quality: r.quality,
       })
     }
   }

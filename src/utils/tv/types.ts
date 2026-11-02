@@ -13,6 +13,14 @@ export interface TvSource {
   api: string
   enabled: boolean
   addedAt: number
+  /**
+   * 该源的整体清晰度（视频高度像素，如 2160 / 1080 / 720）。
+   *
+   * 采集站的搜索接口本身不返回画质，这个值来自导入的源列表标注（如
+   * `movie.json` 里的 quality），是人工实测的结果，用来横向比较「哪个源更清晰」。
+   * 未标注就是 undefined —— 源管理默认不展示这类源，与需求「没有清晰度标识的不展示」一致。
+   */
+  quality?: number
 }
 
 export interface TvItem {
